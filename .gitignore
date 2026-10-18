@@ -1,0 +1,17 @@
+# Build output (CMake presets build into out/)
+out/
+build/
+CMakeUserPresets.json
+
+# Visual Studio / IDEs
+.vs/
+.vscode/
+.idea/
+*.user
+
+# Benchmark output. Commit final results deliberately with `git add -f results/<file>`.
+results/
+
+# Python
+__pycache__/
+.venv/
