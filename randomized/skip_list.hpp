@@ -18,8 +18,6 @@ public:
         const T data;
         vector<Node*> next;
     }
-    
-
 
 public:
     SkipList() {
@@ -102,6 +100,10 @@ private:
         }
         
         return {nullptr, predecessors};
+    }
+
+    size_t random_level() {
+
     }
 
     constexpr size_t max_levels = 32;
