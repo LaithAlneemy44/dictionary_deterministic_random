@@ -6,15 +6,17 @@ template<typename T>
 
 class SkipList {
 public:
-    class Node {
-    public:
-        Node(const T& in_data, Node* in_next) : data(in_data), next(in_next) {
+    struct Node {
+        Node(const T& in_data, const size_t levels) : data{in_data} {
+            if (levels > max_levels) {
+                throw InvalidValueException("Levels exceeded max level size.\nLevels: " + levels "\nMax Levels: " + max_levels);
+            }
 
-        }
+            next.resize(levels);
+        } 
 
-    private:
         const T data;
-        Node* next;
+        vector<Node*> next;
     }
 
 
@@ -25,6 +27,7 @@ public:
 
     void insert(T element) {
         stack<Node*> predecessors;
+        predecessors
     }
 
     void erase(T element) {
@@ -33,7 +36,7 @@ public:
     }
 
     bool exists(T element) {
-        return search(element);
+        return search(element)->data == element;
     }
 
 private:
@@ -41,5 +44,7 @@ private:
 
     }
 
-    constinit Node* head = new Node(T{}, nullptr);
+    constexpr size_t max_levels = 32;
+    constinit size_t levels = 0;
+    array<Node*, max_levels> head;
 };
