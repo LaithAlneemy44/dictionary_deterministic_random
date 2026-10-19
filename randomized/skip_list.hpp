@@ -41,8 +41,15 @@ public:
 
 private:
     Node* search(T element) {
-        int level = levels - 1;
-        Node* current = head;
+        int level;
+        Node* current;
+        for (level = levels - 1; level >= 0; --level) {
+            if (head[level]->data <= element) {
+                current = head[level];
+                break;
+            }
+        }
+
         while (level >= 0) {
             const T& val = current->data;
             if (val == element && level == 0) {
@@ -68,5 +75,5 @@ private:
 
     constexpr size_t max_levels = 32;
     constinit size_t levels = 0;
-    Node(T{}, max_levels) head;
+    array<Node*, max_levels> head;
 };
