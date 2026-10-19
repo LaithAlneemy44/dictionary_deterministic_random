@@ -18,6 +18,7 @@ public:
         const T data;
         vector<Node*> next;
     }
+    
 
 
 public:
@@ -26,22 +27,42 @@ public:
     }
 
     void insert(T element) {
-        stack<Node*> predecessors;
-        predecessors
+        const auto& [node, predecessor] = search(element);
+        if (node && node->data == element) {
+            return;
+        }
+
+        Node* inserted = new Node(element, random_level());
+        for (size_t level = 0; level < max_levels; ++level) {
+            if (!predecessors[level]) {
+                continue;
+            }
+
+            Node* next = predecessors[level]->next[level];
+            predecessors[level]->next[level] = inserted;
+            inserted->next[level] = next;
+        }
     }
 
     void erase(T element) {
-        Node* node = search(element);
+        const auto& [node, predecessors] = search(element);
         if (!node || node->data != element) {
             return;
         }
 
+        for (size_t level = 0; level < max_levels; ++level) {
+            if (!predecessors[level]) {
+                continue;
+            }
 
+            predecessors[level]->next[level] = node->next[level];
+        }
 
+        delete node;
     }
 
     bool exists(T element) {
-        Node* node = search(element);
+        Node* node = search(element)->first;
         return node && node->data == element;
     }
 
@@ -65,9 +86,9 @@ private:
                 return {current, predecessors};
             }
 
-            predecessor[level] = current;
             Node* next = current->next[level];
             if (next && next->data <= element) {
+                predecessor[level] = current;
                 current = next;
             }
 
