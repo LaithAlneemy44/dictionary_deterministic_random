@@ -44,17 +44,22 @@ private:
         int level = levels - 1;
         Node* current = head;
         while (level >= 0) {
-            const T& val = current[level];
-            if (val == element) {
+            const T& val = current->data;
+            if (val == element && level == 0) {
                 return current;
             }
 
-            if (val > element) {
-                --level;
+            Node* next = current->next[level];
+            if (next && next->data <= element) {
+                current = next;
             }
 
+            else if (level == 0) {
+                return current;
+            }
+            
             else {
-                current = current[level];
+                --level;
             }
         }
         
