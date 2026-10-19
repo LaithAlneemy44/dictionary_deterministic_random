@@ -31,7 +31,12 @@ public:
     }
 
     void erase(T element) {
-        stack<Node*> predecessors;
+        Node* node = search(element);
+        if (!node || node->data != element) {
+            return;
+        }
+
+
 
     }
 
@@ -41,12 +46,15 @@ public:
     }
 
 private:
-    Node* search(T element) {
+    pair<Node*, vector<Node*>> search(T element) {
+        vector<Node*> predecessors;
         int level;
         Node* current;
         for (level = levels - 1; level >= 0; --level) {
             if (head[level]->data <= element) {
                 current = head[level];
+                predecessors.resize(level + 1);
+                predecessors[level] = head;
                 break;
             }
         }
@@ -54,16 +62,17 @@ private:
         while (level >= 0) {
             const T& val = current->data;
             if (val == element && level == 0) {
-                return current;
+                return {current, predecessors};
             }
 
+            predecessor[level] = current;
             Node* next = current->next[level];
             if (next && next->data <= element) {
                 current = next;
             }
 
             else if (level == 0) {
-                return current;
+                return {current, predecessors};
             }
             
             else {
@@ -71,10 +80,10 @@ private:
             }
         }
         
-        return nullptr;
+        return {nullptr, predecessors};
     }
 
     constexpr size_t max_levels = 32;
     constinit size_t levels = 0;
-    array<Node*, max_levels> head;
+    constinit array<Node*, max_levels> head;
 };
