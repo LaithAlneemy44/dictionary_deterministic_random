@@ -36,7 +36,8 @@ public:
     }
 
     bool exists(T element) {
-        return search(element)->data == element;
+        Node* node = search(element);
+        return node && node->data == element;
     }
 
 private:
@@ -70,7 +71,7 @@ private:
             }
         }
         
-        return current;
+        return nullptr;
     }
 
     constexpr size_t max_levels = 32;
