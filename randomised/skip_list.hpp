@@ -34,6 +34,7 @@ public:
 
     void insert(T element) {
         const auto& [node, predecessor] = search(element);
+        node = node->next[0];
         if (node && node->data == element) {
             return;
         }
@@ -42,7 +43,7 @@ public:
         Node* inserted = new Node(element, random_height());
         for (size_t level = 0; level < height; ++level) {
             if (!predecessors[level]) {
-                continue;
+                break;
             }
 
             Node* next = predecessors[level]->next[level];
@@ -95,7 +96,7 @@ private:
     }
 
     size_t random_height() {
-        
+
     }
 
     constexpr size_t max_levels = 32;
