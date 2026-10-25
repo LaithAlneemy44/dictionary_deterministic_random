@@ -5,19 +5,27 @@ using namespace std;
 template<typename T>
 
 class SkipList {
-public:
+private:
     struct Node {
-        Node(const T& in_data, const size_t levels) : data{in_data} {
-            if (levels > max_levels) {
-                throw InvalidValueException("Levels exceeded max level size.\nLevels: " + levels "\nMax Levels: " + max_levels);
-            }
-
-            next.resize(levels);
+        Node(const T& in_data, const size_t height) : data{in_data}, next(height) {
+            assert(height >= 1 && height <= max_levels);
+            next.resize(height);
         } 
 
-        const T data;
+        const optional<T> data;
         vector<Node*> next;
-    }
+
+    protected:
+        Node() : next(max_levels) {
+            
+        }
+    };
+    
+    struct Head : Node {
+        Head() : Node() {
+
+        }
+    };
 
 public:
     SkipList() {
@@ -108,5 +116,5 @@ private:
 
     constexpr size_t max_levels = 32;
     constinit size_t levels = 0;
-    constinit array<Node*, max_levels> head;
+    constinit Head head;
 };
