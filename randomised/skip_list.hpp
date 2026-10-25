@@ -56,8 +56,8 @@ public:
             return;
         }
 
-        for (size_t level = 0; level < max_levels; ++level) {
-            if (!predecessors[level]) {
+        for (size_t level = 0; level < predecessors.size(); ++level) {
+            if (!predecessors[level] || predecessors[level]->next != node) {
                 break;
             }
 
@@ -68,8 +68,8 @@ public:
     }
 
     bool exists(T element) {
-        Node* node = search(element).first;
-        return node != head && node->data == element;
+        Node* node = search(element).first->next[0];
+        return node && node->data == element;
     }
 
 private:
@@ -79,7 +79,7 @@ private:
         Node* current = head;
         while (level >= 0) {
             Node* next = current->next[level];
-            if (!next || next->val > element) {
+            if (!next || next->val >= element) {
                 predecessors[level] = current;
                 --level;
             }
