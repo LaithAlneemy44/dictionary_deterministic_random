@@ -52,13 +52,13 @@ public:
 
     void erase(T element) {
         const auto& [node, predecessors] = search(element);
-        if (!node || node->data != element) {
+        if (node == head || node->data != element) {
             return;
         }
 
         for (size_t level = 0; level < max_levels; ++level) {
             if (!predecessors[level]) {
-                continue;
+                break;
             }
 
             predecessors[level]->next[level] = node->next[level];
