@@ -68,8 +68,8 @@ public:
     }
 
     bool exists(T element) {
-        Node* node = search(element)->first;
-        return node && node->data == element;
+        Node* node = search(element).first;
+        return node != head && node->data == element;
     }
 
 private:
