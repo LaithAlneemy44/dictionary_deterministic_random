@@ -51,8 +51,9 @@ public:
     }
 
     void erase(T element) {
-        const auto& [node, predecessors] = search(element);
-        if (node == head || node->data != element) {
+        auto& [node, predecessors] = search(element);
+        node = node->next[0]; 
+        if (!node || node->data != element) {
             return;
         }
 
