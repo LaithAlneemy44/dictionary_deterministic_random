@@ -34,7 +34,7 @@ public:
 
     void insert(T element) {
         const auto& [node, predecessor] = search(element);
-        if (node && node->data == element) {
+        if (node != head && node->data == element) {
             return;
         }
 
