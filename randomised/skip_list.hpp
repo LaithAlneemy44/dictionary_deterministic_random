@@ -74,40 +74,22 @@ public:
 
 private:
     pair<Node*, vector<Node*>> search(T element) {
-        vector<Node*> predecessors;
-        int level;
-        Node* current;
-        for (level = levels - 1; level >= 0; --level) {
-            if (head[level]->data <= element) {
-                current = head[level];
-                predecessors.resize(level + 1);
-                predecessors[level] = head;
-                break;
-            }
-        }
-
+        vector<Node*> predecessors(levels);
+        int level = levels - 1;
+        Node* current = head;
         while (level >= 0) {
-            const T& val = current->data;
-            if (val == element && level == 0) {
-                return {current, predecessors};
-            }
-
             Node* next = current->next[level];
-            if (next && next->data <= element) {
-                predecessor[level] = current;
-                current = next;
+            if (!next || next->val > element) {
+                predecessors[level] = current;
+                --level;
             }
 
-            else if (level == 0) {
-                return {current, predecessors};
-            }
-            
             else {
-                --level;
+                current = next;
             }
         }
         
-        return {nullptr, predecessors};
+        return {current, predecessors};
     }
 
     size_t random_level() {
