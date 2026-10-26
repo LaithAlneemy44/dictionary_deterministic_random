@@ -40,7 +40,8 @@ public:
         }
 
         const size_t height = random_height();
-        Node* inserted = new Node(element, random_height());
+        Node* inserted = new Node(element, height);
+        levels = max(levels, height);
         for (size_t level = 0; level < height; ++level) {
             if (!predecessors[level]) {
                 break;
