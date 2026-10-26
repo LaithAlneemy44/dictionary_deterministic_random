@@ -21,11 +21,6 @@ private:
             next.resize(height);
         }
 
-        ~Node() {
-            delete data;
-            delete next;
-        }
-
         const optional<T> data;
         vector<Node*> next;
 
