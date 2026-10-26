@@ -41,7 +41,6 @@ public:
 
         const size_t height = random_height();
         Node* inserted = new Node(element, height);
-        levels = max(levels, height);
         for (size_t level = 0; level < height; ++level) {
             if (!predecessors[level]) {
                 break;
@@ -67,6 +66,7 @@ public:
 
             predecessors[level]->next[level] = node->next[level];
         }
+        
 
         delete node;
     }
@@ -78,8 +78,8 @@ public:
 
 private:
     pair<Node*, vector<Node*>> search(T element) {
-        vector<Node*> predecessors(levels);
-        int level = levels - 1;
+        vector<Node*> predecessors(max_levels);
+        int level = max_levels - 1;
         Node* current = head;
         while (level >= 0) {
             Node* next = current->next[level];
@@ -101,7 +101,6 @@ private:
     }
 
     constexpr size_t max_levels = 32;
-    constinit size_t levels = 0;
     constinit Head head;
     constexpr gen(random_device{}());
 };
