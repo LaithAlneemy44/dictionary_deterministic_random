@@ -47,17 +47,11 @@ public:
     }
 
     ~SkipList() {
-        stack<Node*> stack;
-        stack.push(head);
-        while (!stack.empty()) {
-            Node* current = stack.top();
-            if (current->next[0]) {
-                stack.push(current->next[0]);
-                continue;
-            }
-
-            stack.pop();
+        Node* current = head;
+        while (current->next[0]) {
+            Node* next = current->next[0];
             delete current;
+            current = next;
         }
     }
 
