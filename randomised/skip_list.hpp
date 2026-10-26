@@ -42,14 +42,13 @@ public:
     }
 
     ~SkipList() {
-        Node* current = head;
-        while (current->next[0]) {
+        Node* current = head->next[0];
+        delete head;
+        while (current) {
             Node* next = current->next[0];
             delete current;
             current = next;
         }
-
-        delete current;
     }
 
     void insert(T element) {
