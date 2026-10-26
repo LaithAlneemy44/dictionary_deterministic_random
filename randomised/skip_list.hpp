@@ -7,7 +7,7 @@ template<typename T>
 class SkipList {
 private:
     struct Node {
-        Node(const T& in_data, const size_t height) : data{in_data}, next(height) {
+        Node(const T& in_data, const uint8_t height) : data{in_data}, next(height) {
             assert(height >= 1 && height <= max_levels);
             next.resize(height);
         } 
@@ -39,9 +39,9 @@ public:
             return;
         }
 
-        const size_t height = random_height();
+        const uint8_t height = random_height();
         Node* inserted = new Node(element, height);
-        for (size_t level = 0; level < height; ++level) {
+        for (uint8_t level = 0; level < height; ++level) {
             if (!predecessors[level]) {
                 break;
             }
@@ -59,7 +59,7 @@ public:
             return;
         }
 
-        for (size_t level = 0; level < predecessors.size(); ++level) {
+        for (uint8_t level = 0; level < max_levels; ++level) {
             if (!predecessors[level] || predecessors[level]->next != node) {
                 break;
             }
@@ -79,7 +79,7 @@ public:
 private:
     pair<Node*, vector<Node*>> search(T element) {
         vector<Node*> predecessors(max_levels);
-        int level = max_levels - 1;
+        uint8_t level = max_levels - 1;
         Node* current = head;
         while (level >= 0) {
             Node* next = current->next[level];
@@ -96,11 +96,11 @@ private:
         return {current, predecessors};
     }
 
-    size_t random_height() {
-        return countr_zeros(static_cast<__uint32_t>(gen()));
+    uint8_t random_height() {
+        return static_cast<uint8_t>(countr_zeros(static_cast<__uint32_t>(gen())));
     }
 
-    constexpr size_t max_levels = 32;
+    constexpr uint8_t max_levels = 32;
     constinit Head head;
     constexpr gen(random_device{}());
 };
