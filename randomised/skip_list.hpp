@@ -96,10 +96,11 @@ private:
     }
 
     size_t random_height() {
-
+        return countr_zeros(static_cast<__uint32_t>(gen()));
     }
 
     constexpr size_t max_levels = 32;
     constinit size_t levels = 0;
     constinit Head head;
+    constexpr gen(random_device{}());
 };
