@@ -35,6 +35,7 @@ private:
 
 public:
     SkipList() {
+
     }
 
     void insert(T element) {
@@ -105,6 +106,7 @@ private:
     }
 
     uint8_t random_height() {
-        return static_cast<uint8_t>(countr_zero(static_cast<uint32_t>(gen())));
+        const uint32_t x = static_cast<uint32_t>(gen());
+        return static_cast<uint8_t>(max(1, countr_zero(x)));
     }
 };
