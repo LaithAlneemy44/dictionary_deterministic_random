@@ -78,7 +78,7 @@ public:
 
 private:
     pair<Node*, vector<Node*>> search(T element) {
-        vector<Node*> predecessors(max_levels);
+        array<Node*, max_levels> predecessors = {};
         uint8_t level = max_levels - 1;
         Node* current = head;
         while (level >= 0) {
