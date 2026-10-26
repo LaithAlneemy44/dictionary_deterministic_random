@@ -51,6 +51,10 @@ public:
         }
     }
 
+    SkipList(const SkipList&) = delete;
+    SkipList& operator=(const SkipList&) = delete;
+
+
     void insert(T element) {
         auto [node, predecessors] = search(element);
         node = node->next[0];
