@@ -53,6 +53,8 @@ public:
             delete current;
             current = next;
         }
+
+        delete current;
     }
 
     void insert(T element) {
