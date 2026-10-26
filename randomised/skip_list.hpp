@@ -56,6 +56,7 @@ public:
                 continue;
             }
 
+            stack.pop();
             delete current;
         }
     }
