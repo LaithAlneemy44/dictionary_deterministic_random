@@ -25,7 +25,6 @@ Writing code is fine for supporting work when asked: benchmarking harness, input
 
 - **Language:** C++, templated as `SkipList<T>`. Assumes C++20.
 - **Semantics:** set or map, unique keys. Inserting an existing key does nothing or assigns. This must match the BST so the comparison is fair.
-- **Ordering:** require only `operator<`. Equality is "neither is less than the other".
 - **Storage:** nodes own their data by value. Keys are immutable to protect the ordering invariant.
 - **Node:** a struct with public members, declared in the private section of `SkipList`. Each node has a tower of forward pointers whose size is its height.
 - **Head:** a sentinel holding only a tower, with no `T`. Approaches discussed: a base struct holding the tower with nodes deriving from it, or recording forward-pointer slots instead of nodes. The head is never compared and never pointed to.

@@ -1,0 +1,37 @@
+# Formatting for the skip list module only (applies to files in this folder and below).
+# Tuned to match the existing code style, so formatting mostly sorts includes
+# rather than reshaping code.
+BasedOnStyle: LLVM
+
+IndentWidth: 4
+AccessModifierOffset: -4
+PointerAlignment: Left            # Node* p, not Node *p
+SpaceAfterTemplateKeyword: false  # template<typename T>
+
+# 0 = never re-wrap long lines; keep line breaks as written.
+ColumnLimit: 0
+AllowShortFunctionsOnASingleLine: None
+AllowShortLoopsOnASingleLine: true
+SpacesBeforeTrailingComments: 2
+KeepEmptyLines:
+  AtStartOfBlock: true
+MaxEmptyLinesToKeep: 1
+
+# ---- Includes ----------------------------------------------------------------
+# Sorted alphabetically within groups, groups separated by a blank line:
+#   0. a .cpp file's own header (e.g. foo.cpp -> "foo.hpp")
+#   1. C headers with .h          <assert.h>
+#   2. C++ standard library       <vector>, <cstdint>
+#   3. other libraries            <gtest/gtest.h>
+#   4. project headers            "dict/rng.hpp"
+SortIncludes: CaseSensitive
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex: '^<[a-z_]+\.h>$'
+    Priority: 1
+  - Regex: '^<[a-z_]+>$'
+    Priority: 2
+  - Regex: '^<.+>$'
+    Priority: 3
+  - Regex: '^".*"$'
+    Priority: 4
