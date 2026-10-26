@@ -1,6 +1,12 @@
 #pragma once
-#include <random>
+#include <array>
 #include <bit>
+#include <cassert>
+#include <cstdint>
+#include <optional>
+#include <random>
+#include <utility>
+#include <vector>
 
 using namespace std;
 
@@ -12,31 +18,23 @@ private:
         Node(const T& in_data, const uint8_t height) : data{in_data}, next(height) {
             assert(height >= 1 && height <= max_levels);
             next.resize(height);
-        } 
+        }
 
         const optional<T> data;
         vector<Node*> next;
 
     protected:
         Node() : next(max_levels) {
-            
         }
     };
-    
+
     struct Head : Node {
         Head() : Node() {
-
         }
     };
-
-private:
-static constexpr uint8_t max_levels = 32;
-Head* head;
-mt19937 gen{random_device{}()};
 
 public:
     SkipList() {
-        
     }
 
     void insert(T element) {
@@ -61,7 +59,7 @@ public:
 
     void erase(T element) {
         auto [node, predecessors] = search(element);
-        node = node->next[0]; 
+        node = node->next[0];
         if (!node || node->data != element) {
             return;
         }
@@ -73,7 +71,6 @@ public:
 
             predecessors[level]->next[level] = node->next[level];
         }
-        
 
         delete node;
     }
@@ -84,6 +81,10 @@ public:
     }
 
 private:
+    static constexpr uint8_t max_levels = 32;
+    Head* head = new Head();
+    mt19937 gen{random_device{}()};
+
     pair<Node*, array<Node*, max_levels>> search(T element) {
         array<Node*, max_levels> predecessors = {};
         int8_t level = max_levels - 1;
@@ -99,7 +100,7 @@ private:
                 current = next;
             }
         }
-        
+
         return {current, predecessors};
     }
 
