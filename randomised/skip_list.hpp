@@ -1,4 +1,6 @@
 #pragma once
+#include <random>
+#include <bit>
 
 using namespace std;
 
@@ -27,13 +29,18 @@ private:
         }
     };
 
+private:
+static constexpr uint8_t max_levels = 32;
+Head* head;
+mt19937 gen{random_device{}()};
+
 public:
     SkipList() {
         
     }
 
     void insert(T element) {
-        const auto& [node, predecessor] = search(element);
+        auto [node, predecessors] = search(element);
         node = node->next[0];
         if (node && node->data == element) {
             return;
@@ -53,14 +60,14 @@ public:
     }
 
     void erase(T element) {
-        auto& [node, predecessors] = search(element);
+        auto [node, predecessors] = search(element);
         node = node->next[0]; 
         if (!node || node->data != element) {
             return;
         }
 
         for (uint8_t level = 0; level < max_levels; ++level) {
-            if (!predecessors[level] || predecessors[level]->next != node) {
+            if (!predecessors[level] || predecessors[level]->next[level] != node) {
                 break;
             }
 
@@ -77,13 +84,13 @@ public:
     }
 
 private:
-    pair<Node*, vector<Node*>> search(T element) {
+    pair<Node*, array<Node*, max_levels>> search(T element) {
         array<Node*, max_levels> predecessors = {};
-        uint8_t level = max_levels - 1;
+        int8_t level = max_levels - 1;
         Node* current = head;
         while (level >= 0) {
             Node* next = current->next[level];
-            if (!next || next->val >= element) {
+            if (!next || next->data >= element) {
                 predecessors[level] = current;
                 --level;
             }
@@ -97,10 +104,6 @@ private:
     }
 
     uint8_t random_height() {
-        return static_cast<uint8_t>(countr_zeros(static_cast<__uint32_t>(gen())));
+        return static_cast<uint8_t>(countr_zero(static_cast<uint32_t>(gen())));
     }
-
-    constexpr uint8_t max_levels = 32;
-    constinit Head head;
-    constexpr gen(random_device{}());
 };
