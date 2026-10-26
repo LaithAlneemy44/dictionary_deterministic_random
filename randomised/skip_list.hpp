@@ -21,21 +21,43 @@ private:
             next.resize(height);
         }
 
+        ~Node() {
+            delete data;
+            delete next;
+        }
+
         const optional<T> data;
         vector<Node*> next;
 
     protected:
         Node() : next(max_levels) {
+
         }
     };
 
     struct Head : Node {
         Head() : Node() {
+
         }
     };
 
 public:
     SkipList() {
+
+    }
+
+    ~SkipList() {
+        stack<Node*> stack;
+        stack.push(head);
+        while (!stack.empty()) {
+            Node* current = stack.top();
+            if (current->next[0]) {
+                stack.push(current->next[0]);
+                continue;
+            }
+
+            delete current;
+        }
     }
 
     void insert(T element) {
