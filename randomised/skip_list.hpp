@@ -121,6 +121,6 @@ private:
 
     uint8_t random_height() {
         const uint32_t x = static_cast<uint32_t>(gen());
-        return static_cast<uint8_t>(min(countr_zero(x) + 1, max_levels));
+        return min(static_cast<uint8_t>(countr_zero(x) + 1), max_levels);
     }
 };
