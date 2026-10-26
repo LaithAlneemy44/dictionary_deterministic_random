@@ -1,4 +1,5 @@
 #pragma once
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cassert>
@@ -35,7 +36,6 @@ private:
 
 public:
     SkipList() {
-
     }
 
     void insert(T element) {
