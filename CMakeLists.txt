@@ -28,8 +28,9 @@ endif()
 add_subdirectory(core)
 # Deterministic: red-black tree.
 add_subdirectory(red_black_tree)
-# Randomized: structure to be decided (skip list / treap).
-add_subdirectory(randomized)
+# Randomised: skip list (primary author: Laith). Header lives in randomised/,
+# exposed to the shared harness through adapters/.
+add_subdirectory(adapters)
 
 # ---- Tests / benchmarks ----------------------------------------------------
 if (DICT_BUILD_TESTS)
