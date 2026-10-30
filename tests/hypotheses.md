@@ -1,0 +1,3 @@
+1. Red black tree will perform worse on average than skip list due to higher implementation overhead of recolouring and rebalancing the tree after insert/erase. However, since both are built upon linkedlists, have the same average and worst-case time complexity, the gap between the two will stay similar.
+
+2. Since skip lists' performance requires a good distribution of levels, which is determined by randomness. Predicting that skip list performs better at CI 50, 99, but not at 99.9.
