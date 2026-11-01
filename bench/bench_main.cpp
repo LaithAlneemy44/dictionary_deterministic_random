@@ -31,7 +31,7 @@
 
 #include "dict/ordered_map.hpp"
 #include "dict/red_black_tree.hpp"
-#include "dict/randomized_map.hpp"
+#include "dict/skip_list_adapter.hpp"
 #include "dict/std_map_adapter.hpp"
 #include "dict/workloads.hpp"
 
@@ -49,7 +49,7 @@ constexpr const char* kBuild = "timing";
 #endif
 
 struct Options {
-    std::vector<std::string> impls{"std_map", "red_black_tree", "randomized"};
+    std::vector<std::string> impls{"std_map", "red_black_tree", "skip_list"};
     std::vector<std::string> workloads{"uniform"};
     std::vector<std::size_t> sizes{100'000};
     std::uint64_t input_seeds = 1;
@@ -73,7 +73,7 @@ std::vector<std::string> split(const std::string& s) {
     if (msg) std::fprintf(stderr, "error: %s\n\n", msg);
     std::fprintf(stderr,
                  "usage: dict_bench [options]\n"
-                 "  --impl LIST         comma list of std_map,red_black_tree,randomized (default all)\n"
+                 "  --impl LIST         comma list of std_map,red_black_tree,skip_list (default all)\n"
                  "  --workload LIST     comma list of uniform,sorted,reverse,sliding_window,zipf, or 'all'\n"
                  "  --n LIST            comma list of sizes (default 100000)\n"
                  "  --input-seeds K     number of distinct input seeds (default 1)\n"
@@ -219,7 +219,7 @@ int main(int argc, char** argv) {
 
     using StdMap = dict::StdMapAdapter<Key, Value>;
     using Rbt = dict::RedBlackTree<Key, Value>;
-    using Rand = dict::RandomizedMap<Key, Value>;
+    using Rand = dict::SkipListAdapter<Key, Value>;
     warn_if_stub<StdMap>(opt);
     warn_if_stub<Rbt>(opt);
     warn_if_stub<Rand>(opt);

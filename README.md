@@ -7,7 +7,8 @@ We compare two ordered dictionaries (insert, lookup, erase, in-order and range i
 | Module | Algorithm | Kind | Primary author |
 |---|---|---|---|
 | [`red_black_tree/`](red_black_tree/) | Red-black tree | Deterministic | Aaron Falco |
-| [`randomized/`](randomized/) | To be decided (e.g. skip list or treap) | Randomized | Laith |
+| [`randomised/`](randomised/) | Skip list | Randomised | Laith |
+| [`adapters/`](adapters/) | Skip list → shared interface glue | Integration only | shared |
 | [`core/`](core/) | `std::map` adapter | Reference only (oracle + baseline, not one of the compared algorithms) | shared |
 
 Beyond mean throughput, we compare the **distributions** of cost: per-operation structural cost (comparisons, nodes visited, restructuring steps) and run-to-run variation across random seeds on identical inputs. We also compare **code complexity**.
@@ -22,7 +23,8 @@ core/include/dict/
   workloads.hpp         input families, generated up front from a seed
   std_map_adapter.hpp   std::map behind the interface (test oracle, benchmark baseline)
 red_black_tree/         deterministic implementation
-randomized/             randomized implementation (structure to be decided)
+randomised/             skip list (header-only) + its own standalone CMake/GoogleTest unit tests
+adapters/               SkipListAdapter: exposes randomised/skip_list.hpp to tests/ and bench/
 tests/                  correctness tests, run against every implementation
 bench/                  benchmark harness (built as two binaries, see below)
 scripts/                experiment runner and plotting
@@ -47,7 +49,7 @@ Use `x64-debug` instead while developing. **Always benchmark the Release build.*
 
 ## Tests
 
-`ctest` runs four suites: `infrastructure` (RNG and workload generator), `std_map`, `red_black_tree` and `randomized`. Each implementation is checked against `std::map` with:
+`ctest` runs four suites: `infrastructure` (RNG and workload generator), `std_map`, `red_black_tree` and `skip_list`. Each implementation is checked against `std::map` with:
 
 - unit tests (empty map, insert/update, erase)
 - 50,000 random operations diffed step by step against the oracle
@@ -125,20 +127,21 @@ This writes PNGs to `results/plots/`: median ns/op vs n with a p5–p95 band, an
 
 ## Implementing a module
 
-1. Branch from `main`, e.g. `feature/red-black-tree` or `feature/randomized`.
+1. Branch from `main`, e.g. `feature/red-black-tree` or `randomised`.
 2. Implement every method in your header. The interface is documented in `core/include/dict/ordered_map.hpp`.
 3. Bump counters with `DICT_COUNT(counters_, field, 1)`. `counters.hpp` and the comments at the top of your header say what each field should count.
 4. Implement `check_invariants()` properly. The tests are only as strong as it is.
 5. Set `implemented = true`, then run `ctest --preset x64-debug` until green.
-6. The randomized structure must draw all randomness from its seeded `rng_`, so runs are reproducible.
-7. Once the randomized structure is chosen, give it its real name everywhere. The placeholder name appears in:
-   - the folder `randomized/` and the header `randomized/include/dict/randomized_map.hpp`
-   - the class `RandomizedMap`, its `name` string, and the CMake target `dict::randomized`
-   - the `randomized` test suite in `tests/CMakeLists.txt`
-   - the type alias and `--impl` default list in `bench/bench_main.cpp`
-   - this README
+6. The randomised structure must draw all its randomness from a generator seeded through its constructor, so runs are reproducible.
+7. The skip list's own unit tests live in `randomised/` as a standalone project (it downloads GoogleTest on first configure):
 
-   Searching the repo for `randomized` finds them all.
+   ```powershell
+   cmake -S randomised -B randomised/build
+   cmake --build randomised/build
+   ctest --test-dir randomised/build --output-on-failure
+   ```
+
+   To include it in the shared tests and benchmarks, forward `adapters/include/dict/skip_list_adapter.hpp` to `SkipList` and set `implemented = true`. The header comment lists what `SkipList` still needs to expose.
 
 ## AI use
 

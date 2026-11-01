@@ -1,7 +1,7 @@
 // Correctness tests, written once against dict::OrderedMap and run for every
 // implementation. The oracle is std::map.
 //
-// Usage: dict_tests [std_map|red_black_tree|randomized|all]
+// Usage: dict_tests [std_map|red_black_tree|skip_list|all]
 //
 // An implementation with `implemented == false` is reported as SKIPPED.
 
@@ -18,7 +18,7 @@
 #include "dict/ordered_map.hpp"
 #include "dict/red_black_tree.hpp"
 #include "dict/rng.hpp"
-#include "dict/randomized_map.hpp"
+#include "dict/skip_list_adapter.hpp"
 #include "dict/std_map_adapter.hpp"
 #include "dict/workloads.hpp"
 
@@ -248,7 +248,7 @@ int main(int argc, char** argv) {
     }
     if (which == "std_map" || which == "all") run_suite<dict::StdMapAdapter<Key, Value>>(t);
     if (which == "red_black_tree" || which == "all") run_suite<dict::RedBlackTree<Key, Value>>(t);
-    if (which == "randomized" || which == "all") run_suite<dict::RandomizedMap<Key, Value>>(t);
+    if (which == "skip_list" || which == "all") run_suite<dict::SkipListAdapter<Key, Value>>(t);
 
     std::printf("\n%d passed, %d failed, %d skipped\n", t.passed, t.failed, t.skipped);
     if (t.failed > 0) return 1;
