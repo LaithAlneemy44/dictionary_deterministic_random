@@ -64,16 +64,17 @@ public:
 
         const uint8_t height = random_height();
         Node* inserted = new Node(element, height);
-        for (uint8_t level = 0; level < levels; ++level) {
+        for (uint8_t level = 0; level < min(levels, height); ++level) {
             Node* next = predecessors[level]->next[level];
             predecessors[level]->next[level] = inserted;
             inserted->next[level] = next;
         }
 
-        levels = max(level, height);
         for (uint8_t level = levels; level < height; ++level) {
             head->next[level] = inserted;
         }
+
+        levels = max(levels, height);
     }
 
     void erase(T element) {
@@ -89,7 +90,7 @@ public:
         }
 
         delete node;
-        while (head > 0 && !head->next[levels - 1]) {
+        while (levels > 0 && !head->next[levels - 1]) {
             --levels;
         }
     }
