@@ -106,8 +106,8 @@ private:
     Head* head = new Head();
     mt19937 gen{random_device{}()};
 
-    pair<Node*, vector<Node*>> search(T element) {
-        vector<Node*> predecessors(levels);
+    pair<Node*, array<Node*, max_levels>> search(T element) {
+        array<Node*, max_levels> predecessors(levels);
         int8_t level = levels - 1;
         Node* current = head;
         while (level >= 0) {
