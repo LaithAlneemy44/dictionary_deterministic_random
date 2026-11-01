@@ -18,7 +18,6 @@ private:
     struct Node {
         Node(const T& in_data, const uint8_t height) : data{in_data}, next(height) {
             assert(height >= 1 && height <= max_levels);
-            next.resize(height);
         }
 
         const optional<T> data;
@@ -83,7 +82,7 @@ public:
         if (!node || node->data != element) {
             return;
         }
-
+ 
         const uint8_t height = node->next.size();
         for (uint8_t level = 0; level < height; ++level) {
             predecessors[level]->next[level] = node->next[level];
