@@ -85,14 +85,13 @@ public:
 
         const uint8_t height = node->next.size();
         for (uint8_t level = 0; level < height; ++level) {
-            if (predecessors[level] == head && !node->next[level]) {
-                levels = min(levels, level);
-            }
-
             predecessors[level]->next[level] = node->next[level];
         }
 
         delete node;
+        while (head > 0 && !head->next[levels - 1]) {
+            --levels;
+        }
     }
 
     bool exists(T element) {
