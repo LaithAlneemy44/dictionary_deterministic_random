@@ -63,6 +63,7 @@ public:
         }
 
         const uint8_t height = random_height();
+        level = max(level, height);
         Node* inserted = new Node(element, height);
         for (uint8_t level = 0; level < height; ++level) {
             if (!predecessors[level]) {
@@ -82,9 +83,10 @@ public:
             return;
         }
 
-        for (uint8_t level = 0; level < max_levels; ++level) {
-            if (!predecessors[level] || predecessors[level]->next[level] != node) {
-                break;
+        const uint8_t height = node->next.size();
+        for (uint8_t level = 0; level < height; ++level) {
+            if (predecessors[level] == head && !node->next[level]) {
+                levels = min(levels, level);
             }
 
             predecessors[level]->next[level] = node->next[level];
@@ -100,12 +102,13 @@ public:
 
 private:
     static constexpr uint8_t max_levels = 32;
+    constinit uint8_t levels = 0;
     Head* head = new Head();
     mt19937 gen{random_device{}()};
 
-    pair<Node*, array<Node*, max_levels>> search(T element) {
-        array<Node*, max_levels> predecessors = {};
-        int8_t level = max_levels - 1;
+    pair<Node*, vector<Node*>> search(T element) {
+        vector<Node*> predecessors(levels);
+        int8_t level = levels - 1;
         Node* current = head;
         while (level >= 0) {
             Node* next = current->next[level];
