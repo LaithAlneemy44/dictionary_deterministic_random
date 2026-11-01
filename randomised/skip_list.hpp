@@ -63,16 +63,16 @@ public:
         }
 
         const uint8_t height = random_height();
-        level = max(level, height);
         Node* inserted = new Node(element, height);
-        for (uint8_t level = 0; level < height; ++level) {
-            if (!predecessors[level]) {
-                break;
-            }
-
+        for (uint8_t level = 0; level < levels; ++level) {
             Node* next = predecessors[level]->next[level];
             predecessors[level]->next[level] = inserted;
             inserted->next[level] = next;
+        }
+
+        levels = max(level, height);
+        for (uint8_t level = levels; level < height; ++level) {
+            head->next[level] = inserted;
         }
     }
 
@@ -102,7 +102,7 @@ public:
 
 private:
     static constexpr uint8_t max_levels = 32;
-    constinit uint8_t levels = 0;
+    uint8_t levels = 0;
     Head* head = new Head();
     mt19937 gen{random_device{}()};
 
