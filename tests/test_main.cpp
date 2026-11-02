@@ -1,7 +1,7 @@
 // Correctness tests, written once against dict::OrderedMap and run for every
 // implementation. The oracle is std::map.
 //
-// Usage: dict_tests [std_map|red_black_tree|skip_list|all]
+// Usage: dict_tests [infrastructure|std_map|red_black_tree|skip_list|comparison|all]
 //
 // An implementation with `implemented == false` is reported as SKIPPED.
 
@@ -10,14 +10,18 @@
 #include <exception>
 #include <functional>
 #include <map>
+#include <set>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
+#include "dict/key_gen.hpp"
 #include "dict/ordered_map.hpp"
 #include "dict/red_black_tree.hpp"
 #include "dict/rng.hpp"
+#include "dict/set_drivers.hpp"
 #include "dict/skip_list_adapter.hpp"
 #include "dict/std_map_adapter.hpp"
 #include "dict/workloads.hpp"
@@ -198,6 +202,46 @@ void test_infrastructure() {
     for (const dict::Op& op : w1.phases[0].ops) CHECK(++seen[op.key] == 1);  // distinct keys
 }
 
+// ---- Comparison benchmark inputs and drivers (bench/compare_main.cpp) ------
+
+// Every generated key is distinct and has the advertised length.
+template <class KeyTag>
+void test_key_gen() {
+    using K = typename KeyTag::type;
+    const std::vector<K> keys = KeyTag::make(1 << 17, 3);
+    CHECK(keys.size() == (1u << 17));
+    CHECK(std::set<K>(keys.begin(), keys.end()).size() == keys.size());
+    if constexpr (std::is_same_v<K, std::string>) {
+        const std::size_t len = KeyTag::name == "str10" ? 10 : 30;
+        for (const K& k : keys) {
+            CHECK(k.size() == len);
+            for (char c : k) CHECK(c >= 'a' && c <= 'z');
+        }
+    }
+    CHECK(KeyTag::make(100, 3) == KeyTag::make(100, 3));  // reproducible
+    CHECK(KeyTag::make(100, 3) != KeyTag::make(100, 4));
+}
+
+// Random insert/search/erase through a set driver over a small key pool,
+// compared step by step against std::set.
+template <template <class> class Driver, class KeyTag>
+void test_driver() {
+    using K = typename KeyTag::type;
+    const std::vector<K> pool = KeyTag::make(500, 11);
+    Driver<K> d;
+    std::set<K> oracle;
+    dict::Xoshiro256 rng(5);
+    for (int i = 0; i < 20'000; ++i) {
+        const K& k = pool[rng.below(pool.size())];
+        switch (rng.below(3)) {
+            case 0: d.insert(k); oracle.insert(k); break;
+            case 1: CHECK(d.search(k) == oracle.contains(k)); break;
+            default: d.erase(k); oracle.erase(k);
+        }
+    }
+    for (const K& k : pool) CHECK(d.search(k) == oracle.contains(k));
+}
+
 // ---- Runner ----------------------------------------------------------------
 
 struct Totals {
@@ -236,6 +280,23 @@ void run_suite(Totals& t) {
     }
 }
 
+template <template <class> class Driver>
+void run_driver_tests(Totals& t) {
+    const std::string name(Driver<int>::name);
+    run_one(t, "comparison", name + "_int", test_driver<Driver, dict::keys::Int>);
+    run_one(t, "comparison", name + "_str10", test_driver<Driver, dict::keys::Str10>);
+    run_one(t, "comparison", name + "_str30", test_driver<Driver, dict::keys::Str30>);
+}
+
+void run_comparison(Totals& t) {
+    std::printf("[comparison]\n");
+    run_one(t, "comparison", "key_gen_int", test_key_gen<dict::keys::Int>);
+    run_one(t, "comparison", "key_gen_str10", test_key_gen<dict::keys::Str10>);
+    run_one(t, "comparison", "key_gen_str30", test_key_gen<dict::keys::Str30>);
+    run_driver_tests<dict::RbtSet>(t);
+    run_driver_tests<dict::SkipSet>(t);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -249,6 +310,7 @@ int main(int argc, char** argv) {
     if (which == "std_map" || which == "all") run_suite<dict::StdMapAdapter<Key, Value>>(t);
     if (which == "red_black_tree" || which == "all") run_suite<dict::RedBlackTree<Key, Value>>(t);
     if (which == "skip_list" || which == "all") run_suite<dict::SkipListAdapter<Key, Value>>(t);
+    if (which == "comparison" || which == "all") run_comparison(t);
 
     std::printf("\n%d passed, %d failed, %d skipped\n", t.passed, t.failed, t.skipped);
     if (t.failed > 0) return 1;

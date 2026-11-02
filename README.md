@@ -21,10 +21,11 @@ core/include/dict/
   counters.hpp          OpCounters + DICT_COUNT macro (compiled out of timing builds)
   rng.hpp               xoshiro256** PRNG (identical output on every compiler)
   workloads.hpp         input families, generated up front from a seed
+  key_gen.hpp           int / str10 / str30 key generators for the comparison benchmark
   std_map_adapter.hpp   std::map behind the interface (test oracle, benchmark baseline)
 red_black_tree/         deterministic implementation
 randomised/             skip list (header-only) + its own standalone CMake/GoogleTest unit tests
-adapters/               SkipListAdapter: exposes randomised/skip_list.hpp to tests/ and bench/
+adapters/               SkipListAdapter (shared interface) and set_drivers.hpp (comparison benchmark)
 tests/                  correctness tests, run against every implementation
 bench/                  benchmark harness (built as two binaries, see below)
 scripts/                experiment runner and plotting
@@ -49,7 +50,7 @@ Use `x64-debug` instead while developing. **Always benchmark the Release build.*
 
 ## Tests
 
-`ctest` runs four suites: `infrastructure` (RNG and workload generator), `std_map`, `red_black_tree` and `skip_list`. Each implementation is checked against `std::map` with:
+`ctest` runs five suites: `infrastructure` (RNG and workload generator), `std_map`, `red_black_tree`, `skip_list` and `comparison` (the comparison benchmark's key generators and set drivers, checked against `std::set`). Each implementation is checked against `std::map` with:
 
 - unit tests (empty map, insert/update, erase)
 - 50,000 random operations diffed step by step against the oracle
@@ -115,6 +116,33 @@ Or invoke the harness directly:
 ```
 
 Run with `--help` to see all flags.
+
+### Comparison: red-black tree vs skip list
+
+`bench/compare_main.cpp` builds `dict_compare`, the head-to-head experiment:
+
+| | |
+|---|---|
+| Operations | insert n distinct keys (random order), n searches (50% hits / 50% misses, shuffled), erase all n (fresh random order) |
+| Key types | `int` (32-bit), `str10` (10 lowercase letters), `str30` (30 lowercase letters) |
+| Sizes | n = 2^10 … 2^23 |
+| Measures | mean ns/op per phase (batch-timed reps) and the per-operation latency distribution: p50, p90, p99, p99.9, p99.99, max and a log-binned histogram (per-op timed reps, using the CPU timestamp counter) |
+
+Both structures go through the set-style drivers in `adapters/include/dict/set_drivers.hpp`. These are the common subset of the red-black tree's API and the skip list's: `insert(key)`, `search(key)` and `erase(key)`. Keys come from `core/include/dict/key_gen.hpp`. They are distinct by construction, and the same input seed gives the same keys and orders for both structures.
+
+MSVC stores strings of up to 15 characters inline (small-string optimisation), so `str10` keys never allocate, while every `str30` key is a separate heap block.
+
+```powershell
+.\scripts\run_comparison.ps1 -Quick   # n up to 2^14, one seed
+.\scripts\run_comparison.ps1          # full run
+```
+
+This writes three files to `results/`:
+- `compare.csv`: ns/op per phase
+- `compare_latency.csv`: per-op percentiles
+- `compare_hist.csv`: latency histograms
+
+Run `dict_compare --help` for all flags.
 
 ### Plots
 
