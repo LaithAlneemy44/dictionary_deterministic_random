@@ -2,14 +2,14 @@
 
 Advanced Algorithms, Programming Assignment 2 (Theme 2: Deterministic vs Randomized).
 
-We compare two ordered dictionaries (insert, lookup, erase, in-order and range iteration):
+We compare two ordered dictionaries, used as sets of unique keys (insert, lookup, erase, in-order and range iteration). Inserting a key that is already present changes nothing.
 
 | Module | Algorithm | Kind | Primary author |
 |---|---|---|---|
 | [`red_black_tree/`](red_black_tree/) | Red-black tree | Deterministic | Aaron Falco |
 | [`randomised/`](randomised/) | Skip list | Randomised | Laith |
 | [`adapters/`](adapters/) | Skip list → shared interface glue | Integration only | shared |
-| [`core/`](core/) | `std::map` adapter | Reference only (oracle + baseline, not one of the compared algorithms) | shared |
+| [`core/`](core/) | `std::set` adapter | Reference only (oracle + baseline, not one of the compared algorithms) | shared |
 
 Beyond mean throughput, we compare the **distributions** of cost: per-operation structural cost (comparisons, nodes visited, restructuring steps) and run-to-run variation across random seeds on identical inputs. We also compare **code complexity**.
 
@@ -17,11 +17,11 @@ Beyond mean throughput, we compare the **distributions** of cost: per-operation 
 
 ```
 core/include/dict/
-  ordered_map.hpp       OrderedMap concept: the interface both implementations satisfy
+  ordered_set.hpp       OrderedSet concept: the interface both implementations satisfy
   counters.hpp          OpCounters + DICT_COUNT macro (compiled out of timing builds)
   rng.hpp               xoshiro256** PRNG (identical output on every compiler)
   workloads.hpp         input families, generated up front from a seed
-  std_map_adapter.hpp   std::map behind the interface (test oracle, benchmark baseline)
+  std_set_adapter.hpp   std::set behind the interface (test oracle, benchmark baseline)
 red_black_tree/         deterministic implementation
 randomised/             skip list (header-only) + its own standalone CMake/GoogleTest unit tests
 adapters/               SkipListAdapter: exposes randomised/skip_list.hpp to tests/ and bench/
@@ -49,9 +49,9 @@ Use `x64-debug` instead while developing. **Always benchmark the Release build.*
 
 ## Tests
 
-`ctest` runs four suites: `infrastructure` (RNG and workload generator), `std_map`, `red_black_tree` and `skip_list`. Each implementation is checked against `std::map` with:
+`ctest` runs four suites: `infrastructure` (RNG and workload generator), `std_set`, `red_black_tree` and `skip_list`. Each implementation is checked against `std::set` with:
 
-- unit tests (empty map, insert/update, erase)
+- unit tests (empty set, duplicate insert, erase)
 - 50,000 random operations diffed step by step against the oracle
 - range queries
 - a replay of every benchmark workload
@@ -128,7 +128,7 @@ This writes PNGs to `results/plots/`: median ns/op vs n with a p5–p95 band, an
 ## Implementing a module
 
 1. Branch from `main`, e.g. `feature/red-black-tree` or `randomised`.
-2. Implement every method in your header. The interface is documented in `core/include/dict/ordered_map.hpp`.
+2. Implement every method in your header. The interface is documented in `core/include/dict/ordered_set.hpp`.
 3. Bump counters with `DICT_COUNT(counters_, field, 1)`. `counters.hpp` and the comments at the top of your header say what each field should count.
 4. Implement `check_invariants()` properly. The tests are only as strong as it is.
 5. Set `implemented = true`, then run `ctest --preset x64-debug` until green.

@@ -24,7 +24,7 @@ else()
 endif()
 
 # ---- Modules ---------------------------------------------------------------
-# Shared interface, counters, RNG and the std::map reference adapter.
+# Shared interface, counters, RNG and the std::set reference adapter.
 add_subdirectory(core)
 # Deterministic: red-black tree.
 add_subdirectory(red_black_tree)

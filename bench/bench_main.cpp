@@ -29,16 +29,15 @@
 #include <string_view>
 #include <vector>
 
-#include "dict/ordered_map.hpp"
+#include "dict/ordered_set.hpp"
 #include "dict/red_black_tree.hpp"
 #include "dict/skip_list_adapter.hpp"
-#include "dict/std_map_adapter.hpp"
+#include "dict/std_set_adapter.hpp"
 #include "dict/workloads.hpp"
 
 namespace {
 
 using dict::Key;
-using dict::Value;
 
 #ifdef DICT_INSTRUMENT
 constexpr bool kInstrumented = true;
@@ -49,7 +48,7 @@ constexpr const char* kBuild = "timing";
 #endif
 
 struct Options {
-    std::vector<std::string> impls{"std_map", "red_black_tree", "skip_list"};
+    std::vector<std::string> impls{"std_set", "red_black_tree", "skip_list"};
     std::vector<std::string> workloads{"uniform"};
     std::vector<std::size_t> sizes{100'000};
     std::uint64_t input_seeds = 1;
@@ -73,7 +72,7 @@ std::vector<std::string> split(const std::string& s) {
     if (msg) std::fprintf(stderr, "error: %s\n\n", msg);
     std::fprintf(stderr,
                  "usage: dict_bench [options]\n"
-                 "  --impl LIST         comma list of std_map,red_black_tree,skip_list (default all)\n"
+                 "  --impl LIST         comma list of std_set,red_black_tree,skip_list (default all)\n"
                  "  --workload LIST     comma list of uniform,sorted,reverse,sliding_window,zipf, or 'all'\n"
                  "  --n LIST            comma list of sizes (default 100000)\n"
                  "  --input-seeds K     number of distinct input seeds (default 1)\n"
@@ -122,15 +121,12 @@ struct PhaseHistograms {
 
 // Applies one operation. Returns a value folded into a checksum so the
 // optimizer cannot discard lookups.
-template <class M>
-inline std::uint64_t apply(M& m, const dict::Op& op) {
+template <class S>
+inline std::uint64_t apply(S& s, const dict::Op& op) {
     switch (op.kind) {
-        case dict::OpKind::Insert: return m.insert(op.key, op.key);
-        case dict::OpKind::Find: {
-            const Value* v = m.find(op.key);
-            return v ? *v : 0;
-        }
-        case dict::OpKind::Erase: return m.erase(op.key);
+        case dict::OpKind::Insert: return s.insert(op.key);
+        case dict::OpKind::Find: return s.contains(op.key);
+        case dict::OpKind::Erase: return s.erase(op.key);
     }
     return 0;
 }
@@ -141,12 +137,12 @@ struct Context {
     std::ofstream* hist;  // null in the timing build
 };
 
-template <dict::OrderedMap M>
+template <dict::OrderedSet M>
 void run_impl(Context& ctx, const dict::Workload& w, std::uint64_t algo_seed) {
     const int total_reps = ctx.opt.warmup + ctx.opt.reps;
     for (int rep = 0; rep < total_reps; ++rep) {
         const bool warm = rep < ctx.opt.warmup;
-        M m = dict::make_map<M>(algo_seed);
+        M m = dict::make_set<M>(algo_seed);
 
         for (const dict::Phase& phase : w.phases) {
             std::uint64_t checksum = 0;
@@ -194,7 +190,7 @@ void run_impl(Context& ctx, const dict::Workload& w, std::uint64_t algo_seed) {
     }
 }
 
-template <dict::OrderedMap M>
+template <dict::OrderedSet M>
 void run_if_selected(Context& ctx, const dict::Workload& w, std::uint64_t algo_seed) {
     if (std::find(ctx.opt.impls.begin(), ctx.opt.impls.end(), M::name) == ctx.opt.impls.end()) return;
     if constexpr (!M::implemented) {
@@ -204,7 +200,7 @@ void run_if_selected(Context& ctx, const dict::Workload& w, std::uint64_t algo_s
     }
 }
 
-template <dict::OrderedMap M>
+template <dict::OrderedSet M>
 void warn_if_stub(const Options& o) {
     if constexpr (!M::implemented) {
         if (std::find(o.impls.begin(), o.impls.end(), M::name) != o.impls.end())
@@ -217,10 +213,10 @@ void warn_if_stub(const Options& o) {
 int main(int argc, char** argv) {
     const Options opt = parse(argc, argv);
 
-    using StdMap = dict::StdMapAdapter<Key, Value>;
-    using Rbt = dict::RedBlackTree<Key, Value>;
-    using Rand = dict::SkipListAdapter<Key, Value>;
-    warn_if_stub<StdMap>(opt);
+    using StdSet = dict::StdSetAdapter<Key>;
+    using Rbt = dict::RedBlackTree<Key>;
+    using Rand = dict::SkipListAdapter<Key>;
+    warn_if_stub<StdSet>(opt);
     warn_if_stub<Rbt>(opt);
     warn_if_stub<Rand>(opt);
 
@@ -247,7 +243,7 @@ int main(int argc, char** argv) {
                     std::fprintf(stderr, "%s n=%zu input_seed=%llu algo_seed=%llu\n", family.c_str(), n,
                                  static_cast<unsigned long long>(input_seed),
                                  static_cast<unsigned long long>(algo_seed));
-                    run_if_selected<StdMap>(ctx, w, algo_seed);
+                    run_if_selected<StdSet>(ctx, w, algo_seed);
                     run_if_selected<Rbt>(ctx, w, algo_seed);
                     run_if_selected<Rand>(ctx, w, algo_seed);
                 }

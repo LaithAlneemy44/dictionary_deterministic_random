@@ -1,14 +1,13 @@
 #pragma once
 
 // Adapter: Laith's SkipList<T> (randomised/skip_list.hpp) behind the shared
-// dict::OrderedMap interface used by tests/ and bench/.
+// dict::OrderedSet interface used by tests/ and bench/.
 //
 // Primary author of the skip list: Laith. This file is integration glue only;
 // it does not modify the skip list.
 //
-// STATUS: stub (`implemented = false`). SkipList<T> currently exposes a set API
-// (insert / erase / exists). The shared harness additionally needs:
-//   - key -> value storage, and find() returning a pointer to the value
+// STATUS: stub (`implemented = false`). SkipList<T> currently exposes
+// insert / erase / exists. The shared harness additionally needs:
 //   - insert/erase reporting whether the key was new / present
 //   - size()
 //   - ordered iteration and range iteration (for_each, for_each_in_range)
@@ -29,11 +28,10 @@
 
 namespace dict {
 
-template <class K, class V, class Compare = std::less<K>>
+template <class K, class Compare = std::less<K>>
 class SkipListAdapter {
 public:
     using key_type = K;
-    using mapped_type = V;
 
     static constexpr const char* name = "skip_list";
     static constexpr bool implemented = false;
@@ -41,8 +39,7 @@ public:
     SkipListAdapter() = default;
     explicit SkipListAdapter(std::uint64_t /*seed*/) {}
 
-    bool insert(const K& /*key*/, const V& /*value*/) { not_implemented("insert"); }
-    const V* find(const K& /*key*/) const { not_implemented("find"); }
+    bool insert(const K& /*key*/) { not_implemented("insert"); }
     bool contains(const K& /*key*/) const { not_implemented("contains"); }
     bool erase(const K& /*key*/) { not_implemented("erase"); }
 
