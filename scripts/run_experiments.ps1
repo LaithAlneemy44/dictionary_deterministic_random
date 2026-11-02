@@ -17,7 +17,13 @@
 #   C2  counters, cost histograms and memory, uniform, string keys
 #   C3  memory only, uniform, all key types, n = 3e6, 1e7
 #   D   seed variance (H4): uniform int, n = 1e3 .. 3e5, 5 input seeds x 20 algorithm seeds
-#   E   distinct keys read per operation (probe keys): uniform/zipf/zipf_shuffled/steady
+#   D2  seed variance with 200 algorithm seeds and 1 input seed, for bootstrap intervals on the spread
+#   E   distinct keys, cache lines and pages read per operation (probe keys): int-like keys on
+#       uniform/sorted/reverse/zipf/zipf_shuffled/steady, large-string keys on uniform/sorted/reverse
+#   G   allocator alone (dict_alloc_bench), with block sizes modelled on each structure's nodes
+#
+# Every instrumented group (C*, D, D2, E) also records heap allocations per operation and their sizes.
+# D2 and G are not in the default set; name them with -Groups.
 
 param([switch]$Quick, [string]$BinDir, [string[]]$Groups = @('A1', 'A2', 'B', 'C1', 'C2', 'C3', 'D', 'E'))
 
@@ -29,11 +35,11 @@ New-Item -ItemType Directory -Force $results | Out-Null
 
 if ($Quick) {
     $mid = '1000,10000'; $big = '30000'; $seedsIn = 2; $seedsAlgo = 2; $reps = 2
-    $varN = '1000,10000'; $varIn = 2; $varAlgo = 3
+    $varN = '1000,10000'; $varIn = 2; $varAlgo = 3; $manyAlgo = 12
 } else {
     $mid = '1000,3000,10000,30000,100000,300000,1000000'; $big = '3000000,10000000'
     $seedsIn = 3; $seedsAlgo = 2; $reps = 3
-    $varN = '1000,10000,100000,300000'; $varIn = 5; $varAlgo = 20
+    $varN = '1000,10000,100000,300000'; $varIn = 5; $varAlgo = 20; $manyAlgo = 200
 }
 
 # Runs a benchmark binary at High priority pinned to core 2 (affinity mask 0x4)
@@ -100,12 +106,34 @@ if ($Groups -contains 'D') {
         '--out', (Result-Path 'seeds_counts.csv'), '--hist-out', (Result-Path 'seeds_histograms.csv'))
 }
 
+if ($Groups -contains 'D2') {
+    # One input seed is enough: this measures the spread from the skip list's own seed. The red-black
+    # tree is left out because it ignores the algorithm seed.
+    Write-Host '== D2 (seed variance, many algorithm seeds) =='
+    Invoke-Bench 'dict_bench.exe' @('--impl', 'skip_list', '--key', 'int', '--workload', 'uniform', '--n', $varN,
+        '--input-seeds', 1, '--algo-seeds', $manyAlgo, '--reps', 1, '--warmup', 1,
+        '--out', (Result-Path 'seeds200_timing.csv'))
+    Invoke-Bench 'dict_bench_instrumented.exe' @('--impl', 'skip_list', '--key', 'int', '--workload', 'uniform',
+        '--n', $varN, '--input-seeds', 1, '--algo-seeds', $manyAlgo, '--reps', 1, '--warmup', 0,
+        '--out', (Result-Path 'seeds200_counts.csv'), '--hist-out', (Result-Path 'seeds200_histograms.csv'))
+}
+
 if ($Groups -contains 'E') {
-    # Probe keys order like int keys, so the structures have the same shapes as in C1.
-    Write-Host '== E (distinct keys read, probe keys) =='
-    Invoke-Bench 'dict_bench_instrumented.exe' @('--key', 'probe', '--workload', 'uniform,zipf,zipf_shuffled,steady',
+    # Probe keys order like int (or large_string) keys, so the structures have the same shapes as in C1 (C2).
+    Write-Host '== E (distinct keys, cache lines and pages read, probe keys) =='
+    Invoke-Bench 'dict_bench_instrumented.exe' @('--key', 'probe',
+        '--workload', 'uniform,sorted,reverse,zipf,zipf_shuffled,steady',
         '--n', $mid, '--input-seeds', 2, '--algo-seeds', 2, '--reps', 1, '--warmup', 0,
         '--out', (Result-Path 'counts_E.csv'), '--hist-out', (Result-Path 'histograms_E.csv'))
+    Invoke-Bench 'dict_bench_instrumented.exe' @('--key', 'probe_large_string', '--workload', 'uniform,sorted,reverse',
+        '--n', $mid, '--input-seeds', 2, '--algo-seeds', 2, '--reps', 1, '--warmup', 0,
+        '--out', (Result-Path 'counts_E2.csv'), '--hist-out', (Result-Path 'histograms_E2.csv'))
+}
+
+if ($Groups -contains 'G') {
+    Write-Host '== G (allocator alone) =='
+    Invoke-Bench 'dict_alloc_bench.exe' @('--n', $mid, '--model', 'fixed:48,tower:32:8', '--reps', 5,
+        '--out', (Result-Path 'alloc_G.csv'))
 }
 
 Write-Host ("Results written to $results in {0:N1} min" -f ((Get-Date) - $started).TotalMinutes)

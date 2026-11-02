@@ -27,8 +27,14 @@ Plots (results/plots/):
   ratio_sources.png                 skip / tree time ratio against the comparison, visit and distinct-key ratios (H1)
   write_cost.png                    time of a write minus its matching lookup, steady workload (H5)
   zipf_order.png                    zipf vs zipf_shuffled lookups: time and node visits
+  seeds_spread_ci.png               spread across 200 algorithm seeds with bootstrap intervals (group D2)
+  locality.png                      cache lines and pages of key bytes per lookup, by build order (group E)
+  alloc_vs_write.png                allocator alone (group G) vs write cost beyond its search
 
-Summary tables (results/summary/): timing, latency, memory, count percentiles, seed variance, write cost.
+Summary tables (results/summary/): timing, latency, memory, count percentiles, seed variance, write cost,
+seed spread intervals, locality, allocator cost.
+
+Also read: seeds200_*.csv (group D2) and alloc_*.csv (dict_alloc_bench, group G).
 """
 
 import sys
@@ -253,7 +259,7 @@ def count_percentiles(hist: pd.DataFrame) -> pd.DataFrame:
 def plot_count_ccdf(hist: pd.DataFrame) -> None:
     metrics = ["comparisons", "node_visits", "structural"]
     for (workload, key), g in hist.groupby(["workload", "key"]):
-        if key == "probe":  # same shapes as int; its distinct_keys is plotted in path_length.png
+        if key.startswith("probe"):  # same shapes as int / large_string; plotted in path_length.png, locality.png
             continue
         n = int(g["n"].max())
         gn = g[g["n"] == n]
@@ -452,12 +458,15 @@ def plot_ratio_sources(timing: pd.DataFrame, cp: pd.DataFrame) -> None:
     for key in ordered(tm.index.get_level_values("key"), KEYS):
         r = (tm.loc[key]["skip_list"] / tm.loc[key]["red_black_tree"]).dropna()
         ax.plot(r.index, r.values, marker="o", markersize=3, label=f"time, {key}")
-    for metric, key, style in [("node_visits", "int", "--"), ("comparisons", "int", "-."),
-                               ("distinct_keys", "probe", ":")]:
+    for metric, key, style, label in [("node_visits", "int", "--", "node visits ratio"),
+                                      ("comparisons", "int", "-.", "comparisons ratio"),
+                                      ("distinct_keys", "probe", ":", "distinct keys ratio"),
+                                      ("cache_lines", "probe_large_string", (0, (5, 1, 1, 1)),
+                                       "key cache lines ratio, large string")]:
         g = f[(f["metric"] == metric) & (f["key"] == key)].pivot_table(index="n", columns="impl", values="mean")
         if {"skip_list", "red_black_tree"} <= set(g.columns):
             r = g["skip_list"] / g["red_black_tree"]
-            ax.plot(r.index, r.values, color="black", linestyle=style, label=f"{metric.replace('_', ' ')} ratio")
+            ax.plot(r.index, r.values, color="black", linestyle=style, label=label)
     ax.axhline(1.0, color="black", linewidth=0.8)
     ax.set_xscale("log")
     ax.set_xlabel("n (keys)")
@@ -537,6 +546,126 @@ def plot_zipf_order(timing: pd.DataFrame, cp: pd.DataFrame | None) -> None:
     finish(fig, PLOTS / "zipf_order.png")
 
 
+# ---- Follow-up tests for the inconclusive results ------------------------------
+
+def plot_seed_spread_ci(frames: list[tuple[pd.DataFrame, str, str]], boot: int = 2000) -> None:
+    """Spread across many algorithm seeds (one input seed), with a bootstrap 95% interval.
+
+    With 20 seeds, p95 and p5 are roughly the second-highest and second-lowest values, so
+    the old spread estimates were noisy. Resampling the seeds shows how noisy.
+    """
+    rng = np.random.default_rng(0)
+    rows = []
+    for df, value, _ in frames:
+        s = df[df["impl"] == "skip_list"]
+        for (n, phase), gp in s.groupby(["n", "phase"]):
+            for input_seed, gi in gp.groupby("input_seed"):
+                v = gi.groupby("algo_seed")[value].median().to_numpy()
+                if len(v) < 10:
+                    continue
+                spread = np.percentile(v, 95) / np.percentile(v, 5)
+                samples = rng.choice(v, size=(boot, len(v)), replace=True)
+                b = np.percentile(samples, 95, axis=1) / np.percentile(samples, 5, axis=1)
+                rows.append({"metric": value, "phase": phase, "n": n, "input_seed": input_seed, "seeds": len(v),
+                             "spread_p95_over_p5": spread, "ci_low": np.percentile(b, 2.5),
+                             "ci_high": np.percentile(b, 97.5), "cv": v.std() / v.mean()})
+    if not rows:
+        return
+    out = pd.DataFrame(rows)
+    out.to_csv(SUMMARY / "seed_spread_ci.csv", index=False)
+
+    fig, axes = plt.subplots(1, len(frames), figsize=(5.0 * len(frames), 3.8), squeeze=False)
+    for j, (_, value, title) in enumerate(frames):
+        ax = axes[0][j]
+        g = out[out["metric"] == value]
+        for k, phase in enumerate(ordered(g["phase"], PHASE_ORDER)):
+            gp = g[g["phase"] == phase].groupby("n")[["spread_p95_over_p5", "ci_low", "ci_high"]].median()
+            ax.errorbar(gp.index * (1 + 0.04 * k), gp["spread_p95_over_p5"],
+                        yerr=[gp["spread_p95_over_p5"] - gp["ci_low"], gp["ci_high"] - gp["spread_p95_over_p5"]],
+                        marker="o", markersize=3, capsize=3, color=f"C{k}", label=phase)
+        ax.axhline(1.0, color="black", linewidth=0.8)
+        ax.set_xscale("log")
+        ax.set_xlabel("n (keys)")
+        ax.set_ylabel("p95 / p5 across algorithm seeds")
+        ax.set_title(title)
+        ax.grid(alpha=0.3)
+        ax.legend(fontsize=8)
+    fig.suptitle("Skip list: spread across its own seeds, with 95% bootstrap intervals")
+    finish(fig, PLOTS / "seeds_spread_ci.png")
+
+
+def plot_locality(cp: pd.DataFrame) -> None:
+    """Cache lines and pages holding the key bytes a lookup reads (probe keys).
+
+    If nodes allocated in key order sit near each other, lookups on a structure built in
+    sorted or reverse order touch fewer lines and pages than on one built in random order.
+    """
+    families = ["uniform", "sorted", "reverse"]
+    f = cp[(cp["key"] == "probe") & (cp["phase"] == "find") & cp["workload"].isin(families)
+           & cp["metric"].isin(["distinct_keys", "cache_lines", "pages"])]
+    if f.empty or "cache_lines" not in set(f["metric"]):
+        return
+    f.pivot_table(index=["workload", "impl", "n"], columns="metric", values="mean").reset_index().to_csv(
+        SUMMARY / "locality.csv", index=False)
+    panels = [("cache_lines", "cache lines of key bytes"), ("pages", "4 KiB pages of key bytes")]
+    styles = {"uniform": "-", "sorted": "--", "reverse": ":"}
+    fig, axes = plt.subplots(1, len(panels), figsize=(5.0 * len(panels), 3.8), squeeze=False)
+    for j, (metric, title) in enumerate(panels):
+        ax = axes[0][j]
+        g = f[f["metric"] == metric]
+        for impl in ordered(g["impl"], IMPLS):
+            for family in families:
+                gi = g[(g["impl"] == impl) & (g["workload"] == family)].sort_values("n")
+                if not gi.empty:
+                    ax.plot(gi["n"], gi["mean"], color=COLOURS.get(impl), linestyle=styles[family], marker="o",
+                            markersize=3, label=f"{impl}, {family}")
+        ax.set_xscale("log")
+        ax.set_xlabel("n (keys)")
+        ax.set_ylabel("mean per lookup")
+        ax.set_title(title)
+        ax.grid(alpha=0.3)
+    axes[0][0].legend(fontsize=7)
+    fig.suptitle("Memory touched by lookups, by build order (probe keys; key bytes only)")
+    finish(fig, PLOTS / "locality.png")
+
+
+def plot_alloc(alloc: pd.DataFrame, timing: pd.DataFrame | None) -> None:
+    """Allocator cost alone (dict_alloc_bench) next to the measured cost of a write beyond its search."""
+    a = alloc.groupby(["model", "phase", "n"])["ns_per_op"].median().reset_index()
+    a.to_csv(SUMMARY / "alloc.csv", index=False)
+    med = None
+    if timing is not None:
+        s = timing[(timing["workload"] == "steady") & (timing["key"] == "int")]
+        med = s.groupby(["impl", "phase", "n"])["ns_per_op"].median().unstack("phase")
+        if {"find_miss", "insert_new", "find_new", "erase_new"} <= set(med.columns):
+            med["insert_extra"] = med["insert_new"] - med["find_miss"]
+            med["erase_extra"] = med["erase_new"] - med["find_new"]
+        else:
+            med = None
+    panels = [("alloc", "insert_extra", "allocation vs insert beyond its search"),
+              ("free", "erase_extra", "free vs erase beyond its search")]
+    fig, axes = plt.subplots(1, len(panels), figsize=(5.0 * len(panels), 3.8), squeeze=False)
+    for j, (phase, extra, title) in enumerate(panels):
+        ax = axes[0][j]
+        for k, model in enumerate(ordered(a["model"], [])):
+            g = a[(a["model"] == model) & (a["phase"] == phase)].sort_values("n")
+            ax.plot(g["n"], g["ns_per_op"], color="black", linestyle=["-", "--", ":", "-."][k % 4], marker="s",
+                    markersize=3, label=f"{phase} only: {model}")
+        if med is not None:
+            for impl in ["red_black_tree", "skip_list"]:
+                if impl in med.index.get_level_values("impl"):
+                    r = med.xs(impl, level="impl")[extra]
+                    impl_line(ax, impl, r.index, r.values)
+        ax.set_xscale("log")
+        ax.set_xlabel("n (live blocks / keys)")
+        ax.set_ylabel("ns / op")
+        ax.set_title(title)
+        ax.grid(alpha=0.3)
+        ax.legend(fontsize=7)
+    fig.suptitle("Could the allocator explain the write cost? (black: allocator alone; colour: steady workload)")
+    finish(fig, PLOTS / "alloc_vs_write.png")
+
+
 def main() -> None:
     PLOTS.mkdir(parents=True, exist_ok=True)
     SUMMARY.mkdir(parents=True, exist_ok=True)
@@ -565,6 +694,7 @@ def main() -> None:
         plot_count_ccdf(hist)
         plot_path_length(cp)
         plot_tail_ratio(cp)
+        plot_locality(cp)
     counts = load("counts_*.csv")
     if counts is not None:
         plot_restructuring(counts)
@@ -587,6 +717,22 @@ def main() -> None:
         variance = pd.concat(variance)
         variance.to_csv(SUMMARY / "seed_variance.csv", index=False)
         plot_seed_spread_vs_n(variance)
+
+    many = []
+    seeds200_counts = load("seeds200_counts.csv")
+    if seeds200_counts is not None:
+        seeds200_counts = seeds200_counts.assign(
+            node_visits_per_op=seeds200_counts["node_visits"] / seeds200_counts["ops"])
+        many.append((seeds200_counts, "node_visits_per_op", "node visits / op"))
+    seeds200_timing = load("seeds200_timing.csv")
+    if seeds200_timing is not None:
+        many.append((seeds200_timing, "ns_per_op", "ns / op"))
+    if many:
+        plot_seed_spread_ci(many)
+
+    alloc = load("alloc_*.csv")
+    if alloc is not None:
+        plot_alloc(alloc, timing)
 
     print(f"plots written to {PLOTS}\nsummaries written to {SUMMARY}")
 

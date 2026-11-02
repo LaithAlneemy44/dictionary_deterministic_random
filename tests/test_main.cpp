@@ -14,6 +14,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -314,18 +315,46 @@ void test_workload_shapes() {
     }
 }
 
+// Cache lines and pages are counted from byte ranges, including ranges that
+// straddle a boundary.
+void test_probe_touch() {
+    dict::probe::begin(nullptr);
+    alignas(4096) static unsigned char buf[3 * 4096];
+    dict::probe::touch(buf + 60, 8);  // straddles lines 0 and 1
+    CHECK(dict::probe::lines.size() == 2);
+    CHECK(dict::probe::pages.size() == 1);
+    dict::probe::touch(buf + 4090, 8);  // straddles pages 0 and 1
+    CHECK(dict::probe::lines.size() == 4);
+    CHECK(dict::probe::pages.size() == 2);
+    dict::probe::touch(buf + 64, 4);  // line 1 again
+    CHECK(dict::probe::lines.size() == 4);
+    dict::probe::note(buf, 8);
+    dict::probe::note(buf, 8);
+    CHECK(dict::probe::read.size() == 1);
+    dict::probe::begin(buf);
+    dict::probe::note(buf, 8);  // the operation's own key is never counted
+    CHECK(dict::probe::read.empty() && dict::probe::lines.empty());
+}
+
+template <class PK>
+PK make_probe(Key k) {
+    if constexpr (std::is_same_v<PK, dict::ProbeString>) return PK(dict::large_string_key(k));
+    else return PK(k);
+}
+
 // Probe keys give the same answers as std::map, and the distinct keys an
 // operation reads are consistent with the structure's own counters. The
 // red-black tree compares the key of every node it visits, so for its lookups
 // the two counts must be equal.
 template <class MP>
 void test_probe_keys() {
+    using PK = typename MP::key_type;
     const dict::Workload w = dict::make_workload("uniform", 2'000, 31);
     MP m = fresh<MP>();
     std::map<Key, Value> oracle;
     for (const dict::Phase& phase : w.phases) {
         for (const dict::Op& op : phase.ops) {
-            const dict::ProbeKey k(op.key);
+            const PK k = make_probe<PK>(op.key);
             const dict::OpCounters before = m.counters();
             dict::probe::begin(&k);
             switch (op.kind) {
@@ -345,6 +374,11 @@ void test_probe_keys() {
             if (op.kind == dict::OpKind::Find && !m.empty()) CHECK(distinct >= 1);
             if (op.kind == dict::OpKind::Find && std::string_view(MP::name) == "red_black_tree")
                 CHECK(distinct == d.node_visits);
+            const std::size_t lines = dict::probe::lines.size();
+            CHECK(dict::probe::pages.size() <= lines);
+            CHECK((distinct == 0) == (lines == 0));
+            // An aligned 8-byte key never straddles a line.
+            if constexpr (std::is_same_v<PK, dict::ProbeKey>) CHECK(lines <= distinct);
         }
         CHECK(m.size() == oracle.size());
         CHECK(m.check_invariants());
@@ -400,10 +434,14 @@ void run_string_suite(Totals& t) {
     }
 }
 
-// Probe-key version of the same implementation, MP = M<dict::ProbeKey, Value>.
-template <dict::OrderedMap MP>
+// Probe-key versions of the same implementation, MP = M<dict::ProbeKey, Value>
+// and MPS = M<dict::ProbeString, Value>.
+template <dict::OrderedMap MP, dict::OrderedMap MPS>
 void run_probe_suite(Totals& t) {
-    if constexpr (MP::implemented) run_one(t, MP::name, "probe_keys", test_probe_keys<MP>);
+    if constexpr (MP::implemented) {
+        run_one(t, MP::name, "probe_keys", test_probe_keys<MP>);
+        run_one(t, MP::name, "probe_strings", test_probe_keys<MPS>);
+    }
 }
 
 }  // namespace
@@ -417,21 +455,22 @@ int main(int argc, char** argv) {
         run_one(t, "infrastructure", "rng_and_workloads", test_infrastructure);
         run_one(t, "infrastructure", "workload_shapes", test_workload_shapes);
         run_one(t, "infrastructure", "key_encodings", test_key_encodings);
+        run_one(t, "infrastructure", "probe_touch", test_probe_touch);
     }
     if (which == "std_map" || which == "all") {
         run_suite<dict::StdMapAdapter<Key, Value>>(t);
         run_string_suite<dict::StdMapAdapter<std::string, Value>>(t);
-        run_probe_suite<dict::StdMapAdapter<dict::ProbeKey, Value>>(t);
+        run_probe_suite<dict::StdMapAdapter<dict::ProbeKey, Value>, dict::StdMapAdapter<dict::ProbeString, Value>>(t);
     }
     if (which == "red_black_tree" || which == "all") {
         run_suite<dict::RedBlackTree<Key, Value>>(t);
         run_string_suite<dict::RedBlackTree<std::string, Value>>(t);
-        run_probe_suite<dict::RedBlackTree<dict::ProbeKey, Value>>(t);
+        run_probe_suite<dict::RedBlackTree<dict::ProbeKey, Value>, dict::RedBlackTree<dict::ProbeString, Value>>(t);
     }
     if (which == "skip_list" || which == "all") {
         run_suite<dict::SkipListAdapter<Key, Value>>(t);
         run_string_suite<dict::SkipListAdapter<std::string, Value>>(t);
-        run_probe_suite<dict::SkipListAdapter<dict::ProbeKey, Value>>(t);
+        run_probe_suite<dict::SkipListAdapter<dict::ProbeKey, Value>, dict::SkipListAdapter<dict::ProbeString, Value>>(t);
     }
 
     std::printf("\n%d passed, %d failed, %d skipped\n", t.passed, t.failed, t.skipped);

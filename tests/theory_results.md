@@ -75,7 +75,7 @@ Insert extra = insert_new − find_miss. Erase extra = erase_new − find_new.
 - From 3·10⁵ the skip list's writes cost much more than the tree's: about 1.7× for insert and over 3× for erase at 10⁶.
 - The conclusion against H5 still stands: the tree's rebalancing never makes its writes expensive. Its insert extra stays below `std::map`'s at every size.
 
-**Speculation.** A skip list write touches the predecessor at every level of the new node's tower. Some of those predecessors are not on the cached search path, or their towers sit on a different cache line from their keys. Once the structure no longer fits in cache, each of those is a miss. This has not been tested.
+**Speculation.** The pointers a write changes are probably not the cause. The predecessor at each level is the node where the search dropped down, and the search has just read its key and its forward pointer at that level, so they should still be in cache. That leaves allocation and freeing as the main suspects: skip list nodes vary in size with their height, while tree nodes are all the same size. This has not been tested. (An earlier version of this paragraph blamed predecessors off the search path, which cannot happen.)
 
 ## 4. Input order (`time_sorted.png`, `time_reverse.png`)
 
@@ -148,3 +148,21 @@ Ranges cover the insert, find and erase phases.
 - H3 needs restating. Insertion order changes speed for both structures, and after a sorted build it can favour the skip list.
 - The zipf comparison should use zipf_shuffled, or report both workloads and explain the difference.
 - The large-string and large-n write results leave a cost the current counters do not explain. Cache-miss counts from a profiler would test the speculation in sections 2 and 3.
+
+## Follow-up tests (written, not yet run)
+
+| Open question | Test | Run with | Output |
+|---|---|---|---|
+| Section 6: is the seed spread pattern just noise? | 200 algorithm seeds, 1 input seed, skip list only, with bootstrap 95% intervals on p95 ÷ p5 | `-Groups D2` | `seeds_spread_ci.png`, `summary/seed_spread_ci.csv` |
+| Section 6: does the top of the structure set a seed's cost? | Simulation of the skip list model (not the C++ code): spread across 200 seeds, and how much of it the node counts on the top levels explain (R²) | `python scripts/simulate_skiplist.py` | `sim_seeds.png`, `summary/sim_seeds_explained.csv` |
+| Section 2: why 1.38–1.45 and not 1.5? | The same simulation, comparing distinct nodes per search with the formula | `python scripts/simulate_skiplist.py` | `sim_distinct.png`, `summary/sim_distinct.csv` |
+| Section 4: do sorted builds have better locality? | Probe keys now also count the distinct cache lines and 4 KiB pages holding the key bytes each operation reads | `-Groups E` | `locality.png`, `summary/locality.csv` |
+| Section 2: what else adds to the large-string ratio? | A large-string probe key that also counts the lines of each string's character buffer | `-Groups E` | `ratio_sources.png` (cache lines line) |
+| Section 3: is allocation the cause? | Heap allocations per operation and their sizes (every instrumented run), plus `dict_alloc_bench`, which times allocation and freeing alone with block sizes modelled on each node | `-Groups C1,G` | `alloc_vs_write.png`, `summary/alloc.csv`, `alloc_size` in `count_percentiles.csv` |
+
+Limits:
+- Lines and pages count only key bytes. Links and towers are read too but the probe cannot see them, so these counts are lower bounds.
+- Allocation counts miss allocations made inside the libstdc++ DLL, so they are only complete for int and probe keys.
+- `dict_alloc_bench` assumes 48-byte tree nodes and 32 + 8h-byte skip list nodes for int keys, worked out from the headers. Check them against the `alloc_size` histogram from group C1.
+
+Two tests need changes to the skip list, so they are left to Laith: a read-only count of nodes per level (to test section 6 on the real structure rather than the model), and a pool allocator shared by both structures (also needs Aaron's agreement).

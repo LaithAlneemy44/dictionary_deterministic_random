@@ -97,7 +97,11 @@ Workload families (`core/include/dict/workloads.hpp`):
 
 In `steady`, each write retraces the search path of the lookup before it, so `insert_new − find_miss` and `erase_new − find_new` give the cost of the write itself.
 
-The instrumented build also accepts `--key probe`. A probe key orders like an int key and records the distinct stored keys each operation compares against (the nodes it has to load). These are written as the `distinct_keys` histogram metric (`core/include/dict/probe_key.hpp`).
+The instrumented build also accepts `--key probe` and `--key probe_large_string`. A probe key orders like an int (or large string) key and records the distinct stored keys each operation compares against (the nodes it has to load), plus the cache lines and 4 KiB pages holding the key bytes read. These are written as the `distinct_keys`, `cache_lines` and `pages` histogram metrics (`core/include/dict/probe_key.hpp`).
+
+The instrumented build also counts heap allocations per operation (`heap_allocs`, `heap_frees`) and their sizes (`alloc_size`). `dict_alloc_bench` times allocation and freeing alone, with block sizes modelled on each structure's nodes.
+
+`scripts/simulate_skiplist.py` simulates the skip list model (not the C++ code) to check the distinct-node formula and where the spread across seeds comes from.
 
 Run the standard experiment set (Release build required):
 
@@ -105,6 +109,7 @@ Run the standard experiment set (Release build required):
 .\scripts\run_experiments.ps1 -Quick           # small sizes, checks the pipeline (~seconds)
 .\scripts\run_experiments.ps1                  # full run
 .\scripts\run_experiments.ps1 -Groups B,C1,D,E # only some groups (see the script header)
+.\scripts\run_experiments.ps1 -Groups C1,D2,E,G # follow-up tests (D2 and G are not in the default set)
 ```
 
 This writes three files to `results/`:

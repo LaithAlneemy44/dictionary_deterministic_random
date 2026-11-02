@@ -22,11 +22,20 @@
 //
 // Key types (--key): int, small_string (fits the small string buffer, no heap
 // allocation) and large_string (always heap allocated). See dict/keys.hpp.
-// The instrumented build also accepts probe, a key that orders like int and
-// records the distinct stored keys each operation reads (dict/probe_key.hpp),
-// written as the distinct_keys histogram.
+// The instrumented build also accepts probe, a key that orders like int, and
+// probe_large_string, one that orders like large_string. Both record the
+// distinct stored keys each operation reads and the cache lines and pages
+// those reads touch (dict/probe_key.hpp), written as the distinct_keys,
+// cache_lines and pages histograms.
+//
+// The instrumented build also replaces global operator new and delete to count
+// the heap allocations each operation makes (heap_allocs, heap_frees) and their
+// sizes (alloc_size: value = bytes requested, count = allocations). Allocations
+// made inside the libstdc++ DLL (e.g. some std::string copies) bypass the
+// replacement, so these counts are only complete for int and probe keys.
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -66,6 +75,38 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#endif
+
+// ---- Allocation tracking (instrumented build) -------------------------------
+//
+// Counts only while `active` is set, which the harness does around each
+// operation, so its own allocations (histograms, probe vectors) are excluded.
+// Sizes above kMaxSize share the last bucket. The counters exist in both builds
+// so the harness compiles unchanged; only the instrumented build replaces new.
+namespace alloc_track {
+inline constexpr std::size_t kMaxSize = 1024;
+inline bool active = false;
+inline std::uint64_t allocs = 0;
+inline std::uint64_t frees = 0;
+inline std::array<std::uint64_t, kMaxSize + 1> sizes{};
+}  // namespace alloc_track
+
+#ifdef DICT_INSTRUMENT
+void* operator new(std::size_t n) {
+    if (alloc_track::active) {
+        ++alloc_track::allocs;
+        ++alloc_track::sizes[std::min(n, alloc_track::kMaxSize)];
+    }
+    if (void* p = std::malloc(n ? n : 1)) return p;
+    throw std::bad_alloc();
+}
+
+void operator delete(void* p) noexcept {
+    if (alloc_track::active && p) ++alloc_track::frees;
+    std::free(p);
+}
+
+void operator delete(void* p, std::size_t) noexcept { ::operator delete(p); }
 #endif
 
 namespace {
@@ -148,7 +189,8 @@ std::vector<std::string> split(const std::string& s) {
                  "usage: dict_bench [options]\n"
                  "  --impl LIST          comma list of std_map,red_black_tree,skip_list (default all)\n"
                  "  --key LIST           comma list of int,small_string,large_string, or 'all' (default int);\n"
-                 "                       the instrumented build also accepts probe (records distinct keys read)\n"
+                 "                       the instrumented build also accepts probe and probe_large_string\n"
+                 "                       (record distinct keys, cache lines and pages read)\n"
                  "  --workload LIST      comma list of uniform,sorted,reverse,sliding_window,zipf,zipf_shuffled,\n"
                  "                       steady, or 'all'\n"
                  "  --n LIST             comma list of sizes (default 100000)\n"
@@ -197,8 +239,8 @@ Options parse(int argc, char** argv) {
         else usage(("unknown flag: " + std::string(a)).c_str());
     }
     for (const auto& k : o.keys) {
-        if (k == "probe") {
-            if (!kInstrumented) usage("--key probe needs the instrumented build (dict_bench_instrumented)");
+        if (k == "probe" || k == "probe_large_string") {
+            if (!kInstrumented) usage("probe keys need the instrumented build (dict_bench_instrumented)");
         } else if (std::find(dict::key_kind_names().begin(), dict::key_kind_names().end(), k) ==
                    dict::key_kind_names().end()) {
             usage(("unknown key type: " + k).c_str());
@@ -229,6 +271,9 @@ K convert_key(Key k, dict::KeyKind kind) {
     } else if constexpr (std::is_same_v<K, dict::ProbeKey>) {
         (void)kind;
         return dict::ProbeKey(k);
+    } else if constexpr (std::is_same_v<K, dict::ProbeString>) {
+        (void)kind;
+        return dict::ProbeString(dict::large_string_key(k));
     } else {
         (void)kind;
         return k;
@@ -319,8 +364,12 @@ TickScale calibrate_ticks() {
 using Histogram = std::map<std::uint64_t, std::uint64_t>;
 
 struct PhaseHistograms {
-    Histogram comparisons, node_visits, structural, distinct_keys;  // distinct_keys: probe keys only
+    Histogram comparisons, node_visits, structural, heap_allocs, heap_frees;
+    Histogram distinct_keys, cache_lines, pages;  // probe keys only
 };
+
+template <class K>
+inline constexpr bool kIsProbe = std::is_same_v<K, dict::ProbeKey> || std::is_same_v<K, dict::ProbeString>;
 
 struct Context {
     const Options& opt;
@@ -358,16 +407,26 @@ void run_impl(Context& ctx, const RunInfo& r, const std::vector<TypedPhase<typen
 
             const auto t0 = std::chrono::steady_clock::now();
             if constexpr (kInstrumented) {
-                constexpr bool kProbe = std::is_same_v<typename M::key_type, dict::ProbeKey>;
+                constexpr bool kProbe = kIsProbe<typename M::key_type>;
+                alloc_track::sizes.fill(0);
                 for (const auto& op : phase.ops) {
                     const dict::OpCounters before = m.counters();
+                    const std::uint64_t allocs_before = alloc_track::allocs, frees_before = alloc_track::frees;
                     if constexpr (kProbe) dict::probe::begin(&op.key);
+                    alloc_track::active = true;
                     checksum += apply(m, op);
+                    alloc_track::active = false;
                     const dict::OpCounters d = m.counters() - before;
                     ++h.comparisons[d.comparisons];
                     ++h.node_visits[d.node_visits];
                     ++h.structural[d.structural];
-                    if constexpr (kProbe) ++h.distinct_keys[dict::probe::read.size()];
+                    ++h.heap_allocs[alloc_track::allocs - allocs_before];
+                    ++h.heap_frees[alloc_track::frees - frees_before];
+                    if constexpr (kProbe) {
+                        ++h.distinct_keys[dict::probe::read.size()];
+                        ++h.cache_lines[dict::probe::lines.size()];
+                        ++h.pages[dict::probe::pages.size()];
+                    }
                 }
             } else {
                 for (const auto& op : phase.ops) checksum += apply(m, op);
@@ -396,7 +455,18 @@ void run_impl(Context& ctx, const RunInfo& r, const std::vector<TypedPhase<typen
                 dump("comparisons", h.comparisons);
                 dump("node_visits", h.node_visits);
                 dump("structural", h.structural);
+                dump("heap_allocs", h.heap_allocs);
+                dump("heap_frees", h.heap_frees);
                 dump("distinct_keys", h.distinct_keys);
+                dump("cache_lines", h.cache_lines);
+                dump("pages", h.pages);
+                if constexpr (kInstrumented) {
+                    // Per allocation, not per operation: value = bytes requested.
+                    Histogram sizes;
+                    for (std::size_t b = 0; b < alloc_track::sizes.size(); ++b)
+                        if (alloc_track::sizes[b]) sizes[b] = alloc_track::sizes[b];
+                    dump("alloc_size", sizes);
+                }
             }
         }
     }
@@ -573,6 +643,8 @@ int main(int argc, char** argv) {
                 for (std::uint64_t is = 0; is < opt.input_seeds; ++is) {
                     const dict::Workload w = dict::make_workload(family, n, 1'000 + is);
                     if (key == "probe") run_key<dict::ProbeKey>(ctx, w, kind, "probe");
+                    else if (key == "probe_large_string")
+                        run_key<dict::ProbeString>(ctx, w, kind, "probe_large_string");
                     else if (kind == dict::KeyKind::Int) run_key<Key>(ctx, w, kind, dict::key_kind_name(kind));
                     else run_key<std::string>(ctx, w, kind, dict::key_kind_name(kind));
                 }
