@@ -7,7 +7,11 @@ sliding_window,insert,red_black_tree,0.5820555000000001,2.318073
 sliding_window,insert,skip_list,2.0003345,0.0
 sorted,insert,red_black_tree,0.999963,4.999816
 sorted,insert,skip_list,2.0003345,0.0
+steady,insert,red_black_tree,0.5820555000000001,2.318073
+steady,insert,skip_list,2.0003345,0.0
 uniform,insert,red_black_tree,0.5820555000000001,2.318073
 uniform,insert,skip_list,2.0003345,0.0
 zipf,insert,red_black_tree,0.5820555000000001,2.318073
 zipf,insert,skip_list,2.0003345,0.0
+zipf_shuffled,insert,red_black_tree,0.5820555000000001,2.318073
+zipf_shuffled,insert,skip_list,2.0003345,0.0
