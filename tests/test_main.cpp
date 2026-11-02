@@ -16,6 +16,7 @@
 #include <utility>
 #include <vector>
 
+#include "dict/keys.hpp"
 #include "dict/ordered_map.hpp"
 #include "dict/red_black_tree.hpp"
 #include "dict/rng.hpp"
@@ -194,6 +195,55 @@ void test_workloads() {
     }
 }
 
+// Replays every workload family with string keys (as the benchmark converts
+// them) against a std::map oracle. M must have std::string keys.
+template <class M>
+void test_workloads_strings(dict::KeyKind kind) {
+    auto to_key = [&](Key k) {
+        return kind == dict::KeyKind::LargeString ? dict::large_string_key(k) : dict::small_string_key(k);
+    };
+    for (std::string_view family : dict::workload_families()) {
+        const dict::Workload w = dict::make_workload(family, 2'000, 77);
+        M m = fresh<M>();
+        std::map<std::string, Value> oracle;
+        for (const dict::Phase& phase : w.phases) {
+            for (const dict::Op& op : phase.ops) {
+                const std::string k = to_key(op.key);
+                switch (op.kind) {
+                    case dict::OpKind::Insert:
+                        CHECK(m.insert(k, op.key) == oracle.insert_or_assign(k, op.key).second);
+                        break;
+                    case dict::OpKind::Find: {
+                        const Value* got = m.find(k);
+                        auto it = oracle.find(k);
+                        CHECK((got == nullptr) == (it == oracle.end()));
+                        if (got) CHECK(*got == it->second);
+                        break;
+                    }
+                    case dict::OpKind::Erase:
+                        CHECK(m.erase(k) == (oracle.erase(k) == 1));
+                        break;
+                }
+            }
+            CHECK(m.size() == oracle.size());
+            CHECK(m.check_invariants());
+        }
+    }
+}
+
+// The string encodings must preserve integer order and have the stated lengths.
+void test_key_encodings() {
+    dict::Xoshiro256 rng(3);
+    for (int i = 0; i < 10'000; ++i) {
+        const Key a = rng.next(), b = rng.next();
+        CHECK((a < b) == (dict::small_string_key(a) < dict::small_string_key(b)));
+        CHECK((a < b) == (dict::large_string_key(a) < dict::large_string_key(b)));
+    }
+    CHECK(dict::small_string_key(0) < dict::small_string_key(1));
+    CHECK(dict::small_string_key(~Key{0}).size() == dict::kSmallStringLength);
+    CHECK(dict::large_string_key(12345).size() == dict::kLargeStringLength);
+}
+
 // Sanity checks on the shared infrastructure itself (implementation-independent).
 void test_infrastructure() {
     dict::Xoshiro256 a(1), b(1), c(2);
@@ -250,6 +300,17 @@ void run_suite(Totals& t) {
     }
 }
 
+// String-key versions of the same implementation, MS = M<std::string, Value>.
+template <dict::OrderedMap MS>
+void run_string_suite(Totals& t) {
+    if constexpr (MS::implemented) {
+        run_one(t, MS::name, "workloads_small_string",
+                [] { test_workloads_strings<MS>(dict::KeyKind::SmallString); });
+        run_one(t, MS::name, "workloads_large_string",
+                [] { test_workloads_strings<MS>(dict::KeyKind::LargeString); });
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -259,10 +320,20 @@ int main(int argc, char** argv) {
     if (which == "infrastructure" || which == "all") {
         std::printf("[infrastructure]\n");
         run_one(t, "infrastructure", "rng_and_workloads", test_infrastructure);
+        run_one(t, "infrastructure", "key_encodings", test_key_encodings);
     }
-    if (which == "std_map" || which == "all") run_suite<dict::StdMapAdapter<Key, Value>>(t);
-    if (which == "red_black_tree" || which == "all") run_suite<dict::RedBlackTree<Key, Value>>(t);
-    if (which == "skip_list" || which == "all") run_suite<dict::SkipListAdapter<Key, Value>>(t);
+    if (which == "std_map" || which == "all") {
+        run_suite<dict::StdMapAdapter<Key, Value>>(t);
+        run_string_suite<dict::StdMapAdapter<std::string, Value>>(t);
+    }
+    if (which == "red_black_tree" || which == "all") {
+        run_suite<dict::RedBlackTree<Key, Value>>(t);
+        run_string_suite<dict::RedBlackTree<std::string, Value>>(t);
+    }
+    if (which == "skip_list" || which == "all") {
+        run_suite<dict::SkipListAdapter<Key, Value>>(t);
+        run_string_suite<dict::SkipListAdapter<std::string, Value>>(t);
+    }
 
     std::printf("\n%d passed, %d failed, %d skipped\n", t.passed, t.failed, t.skipped);
     if (t.failed > 0) return 1;
