@@ -55,20 +55,16 @@ public:
     }
 
     ~SkipList() {
-        Node* current = head->next()[0];
+        clear();
         delete head;
-        while (current) {
-            Node* next = current->next()[0];
-            delete current;
-            current = next;
-        }
     }
 
     SkipList(const SkipList&) = delete;
     SkipList& operator=(const SkipList&) = delete;
 
 
-    void insert(const T& element) {
+    // Returns true if element was new; a duplicate changes nothing.
+    bool insert(const T& element) {
         auto [node, predecessors] = search(element);
         node = node->next()[0];
         if (node) {
@@ -76,7 +72,7 @@ public:
         }
 
         if (node && node->data == element) {
-            return;
+            return false;
         }
 
         const uint8_t height = random_height();
@@ -94,9 +90,12 @@ public:
 
         DICT_COUNT(counters_, structural, height);
         levels = max(levels, height);
+        ++size_;
+        return true;
     }
 
-    void erase(const T& element) {
+    // Returns true if element was present.
+    bool erase(const T& element) {
         auto [node, predecessors] = search(element);
         node = node->next()[0];
         if (node) {
@@ -104,7 +103,7 @@ public:
         }
 
         if (!node || node->data != element) {
-            return;
+            return false;
         }
 
         for (uint8_t level = 0; level < node->height; ++level) {
@@ -116,6 +115,9 @@ public:
         while (levels > 0 && !head->next()[levels - 1]) {
             --levels;
         }
+
+        --size_;
+        return true;
     }
 
     bool exists(const T& element) const {
@@ -125,6 +127,87 @@ public:
         }
 
         return node && node->data == element;
+    }
+
+    size_t size() const {
+        return size_;
+    }
+
+    bool empty() const {
+        return size_ == 0;
+    }
+
+    void clear() {
+        Node* current = head->next()[0];
+        while (current) {
+            Node* next = current->next()[0];
+            delete current;
+            current = next;
+        }
+
+        fill_n(head->next(), max_levels, nullptr);
+        levels = 0;
+        size_ = 0;
+    }
+
+    // Visits every element in ascending order by walking level 0.
+    template<typename F>
+    void for_each(F&& visit) const {
+        for (Node* node = head->next()[0]; node; node = node->next()[0]) {
+            visit(*node->data);
+        }
+    }
+
+    // Checks the whole structure. Not counted. Level 0 must be strictly
+    // ascending and hold size() nodes. Every higher level must link exactly the
+    // level-0 nodes tall enough to reach it, in the same order, so a node is
+    // never missing from, or linked above, its own height.
+    bool check_invariants() const {
+        for (uint8_t level = levels; level < max_levels; ++level) {
+            if (head->next()[level]) {
+                return false;
+            }
+        }
+
+        if (levels > 0 && !head->next()[levels - 1]) {
+            return false;
+        }
+
+        size_t count = 0;
+        for (Node* node = head->next()[0]; node; node = node->next()[0]) {
+            ++count;
+            if (!node->data || node->height < 1 || node->height > levels) {
+                return false;
+            }
+
+            Node* next = node->next()[0];
+            if (next && !(*node->data < *next->data)) {
+                return false;
+            }
+        }
+
+        if (count != size_) {
+            return false;
+        }
+
+        for (uint8_t level = 1; level < levels; ++level) {
+            Node* expected = head->next()[level];
+            for (Node* node = head->next()[0]; node; node = node->next()[0]) {
+                if (node->height > level) {
+                    if (node != expected) {
+                        return false;
+                    }
+
+                    expected = expected->next()[level];
+                }
+            }
+
+            if (expected) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     const dict::OpCounters& counters() const {
@@ -138,6 +221,7 @@ public:
 private:
     static constexpr uint8_t max_levels = 32;
     uint8_t levels = 0;
+    size_t size_ = 0;
     Node* head = new (max_levels) Node(nullopt, max_levels);
     dict::Xoshiro256 rng_{};
 

@@ -3,22 +3,13 @@
 // Adapter: Laith's SkipList<T> (randomised/skip_list.hpp) behind the shared
 // dict::OrderedSet interface used by tests/ and bench/.
 //
-// Primary author of the skip list: Laith. This file is integration glue only;
-// it does not modify the skip list.
-//
-// STATUS: stub (`implemented = false`). SkipList<T> currently exposes
-// insert / erase / exists. The shared harness additionally needs:
-//   - insert/erase reporting whether the key was new / present
-//   - size()
-//   - ordered iteration (for_each)
-//   - check_invariants()
-// The seed and counters are already forwarded to the skip list.
-// Once SkipList provides these, forward to it here and set `implemented = true`.
+// Primary author of the skip list: Laith. This file is integration glue only:
+// every method forwards to the skip list, and the seed passed by the benchmark
+// seeds its tower heights.
 
 #include <cstddef>
 #include <cstdint>
-#include <stdexcept>
-#include <string>
+#include <utility>
 
 #include "dict/counters.hpp"
 #include "skip_list.hpp"
@@ -31,32 +22,28 @@ public:
     using key_type = K;
 
     static constexpr const char* name = "skip_list";
-    static constexpr bool implemented = false;
+    static constexpr bool implemented = true;
 
     SkipListAdapter() = default;
     explicit SkipListAdapter(std::uint64_t seed) : list_(seed) {}
 
-    bool insert(const K& /*key*/) { not_implemented("insert"); }
-    bool contains(const K& /*key*/) const { not_implemented("contains"); }
-    bool erase(const K& /*key*/) { not_implemented("erase"); }
+    bool insert(const K& key) { return list_.insert(key); }
+    bool contains(const K& key) const { return list_.exists(key); }
+    bool erase(const K& key) { return list_.erase(key); }
 
-    std::size_t size() const { not_implemented("size"); }
-    bool empty() const { not_implemented("empty"); }
-    void clear() { not_implemented("clear"); }
+    std::size_t size() const { return list_.size(); }
+    bool empty() const { return list_.empty(); }
+    void clear() { list_.clear(); }
 
     template <class F>
-    void for_each(F&& /*visit*/) const { not_implemented("for_each"); }
+    void for_each(F&& visit) const { list_.for_each(std::forward<F>(visit)); }
 
-    bool check_invariants() const { not_implemented("check_invariants"); }
+    bool check_invariants() const { return list_.check_invariants(); }
 
     const OpCounters& counters() const { return list_.counters(); }
     void reset_counters() { list_.reset_counters(); }
 
 private:
-    [[noreturn]] static void not_implemented(const char* op) {
-        throw std::logic_error(std::string("SkipListAdapter::") + op + " not implemented");
-    }
-
     SkipList<K> list_;
 };
 

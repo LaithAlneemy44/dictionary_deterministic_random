@@ -12,6 +12,7 @@
 #include <random>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -153,35 +154,42 @@ TEST(SkipListErase, ReinsertAfterErase) {
 
 namespace {
 
-// Applies a random mix of operations to both structures and checks every lookup.
+// Applies a random mix of operations to both structures and checks every
+// result, the size, and periodically the skip list's invariants. The skip list
+// is seeded with the same seed, so each seed also tries different tower heights.
 void run_against_set(unsigned seed, int operations, int key_range) {
     std::mt19937 rng(seed);
     std::uniform_int_distribution<int> key(0, key_range - 1);
     std::uniform_int_distribution<int> op(0, 2);
 
-    SkipList<int> list;
+    SkipList<int> list(seed);
     std::set<int> reference;
 
     for (int i = 0; i < operations; ++i) {
         const int k = key(rng);
         switch (op(rng)) {
         case 0:
-            list.insert(k);
-            reference.insert(k);
+            ASSERT_EQ(list.insert(k), reference.insert(k).second)
+                << "seed " << seed << ", operation " << i << ", insert " << k;
             break;
         case 1:
-            list.erase(k);
-            reference.erase(k);
+            ASSERT_EQ(list.erase(k), reference.erase(k) == 1)
+                << "seed " << seed << ", operation " << i << ", erase " << k;
             break;
         default:
             ASSERT_EQ(list.exists(k), reference.count(k) == 1)
                 << "seed " << seed << ", operation " << i << ", key " << k;
         }
+        ASSERT_EQ(list.size(), reference.size()) << "seed " << seed << ", operation " << i;
+        if (i % 500 == 0) {
+            ASSERT_TRUE(list.check_invariants()) << "seed " << seed << ", operation " << i;
+        }
     }
 
-    for (int k = 0; k < key_range; ++k) {
-        ASSERT_EQ(list.exists(k), reference.count(k) == 1) << "seed " << seed << ", final key " << k;
-    }
+    ASSERT_TRUE(list.check_invariants()) << "seed " << seed;
+    std::vector<int> contents;
+    list.for_each([&](int k) { contents.push_back(k); });
+    ASSERT_EQ(contents, std::vector<int>(reference.begin(), reference.end())) << "seed " << seed;
 }
 
 }  // namespace
@@ -368,4 +376,67 @@ TEST(SkipListSeed, DifferentSeedsDifferentStructure) {
     SkipList<int> a(1);
     SkipList<int> b(2);
     EXPECT_NE(heights_after_inserts(a), heights_after_inserts(b));
+}
+
+// ---- Return values, size, clear, for_each ----------------------------------
+
+TEST(SkipListInterface, InsertAndEraseReportChanges) {
+    SkipList<int> list;
+    EXPECT_TRUE(list.insert(5));
+    EXPECT_FALSE(list.insert(5));
+    EXPECT_TRUE(list.erase(5));
+    EXPECT_FALSE(list.erase(5));
+}
+
+TEST(SkipListInterface, SizeAndEmpty) {
+    SkipList<int> list;
+    EXPECT_TRUE(list.empty());
+    EXPECT_EQ(list.size(), 0u);
+
+    list.insert(3);
+    list.insert(1);
+    list.insert(3);
+    EXPECT_FALSE(list.empty());
+    EXPECT_EQ(list.size(), 2u);
+
+    list.erase(1);
+    list.erase(4);
+    EXPECT_EQ(list.size(), 1u);
+}
+
+TEST(SkipListInterface, ForEachIsAscending) {
+    SkipList<int> list;
+    for (int k : {5, 1, 9, 3, 7}) {
+        list.insert(k);
+    }
+
+    std::vector<int> seen;
+    list.for_each([&](int k) { seen.push_back(k); });
+    EXPECT_EQ(seen, std::vector<int>({1, 3, 5, 7, 9}));
+}
+
+TEST(SkipListInterface, ClearThenReuse) {
+    SkipList<int> list;
+    for (int i = 0; i < 1000; ++i) {
+        list.insert(i);
+    }
+
+    list.clear();
+    EXPECT_TRUE(list.empty());
+    EXPECT_FALSE(list.exists(500));
+    EXPECT_TRUE(list.check_invariants());
+
+    EXPECT_TRUE(list.insert(42));
+    EXPECT_TRUE(list.exists(42));
+    EXPECT_EQ(list.size(), 1u);
+    EXPECT_TRUE(list.check_invariants());
+}
+
+TEST(SkipListInterface, InvariantsHoldWhenEmpty) {
+    SkipList<int> list;
+    EXPECT_TRUE(list.check_invariants());
+
+    list.insert(1);
+    list.erase(1);
+    EXPECT_TRUE(list.check_invariants());
 }
