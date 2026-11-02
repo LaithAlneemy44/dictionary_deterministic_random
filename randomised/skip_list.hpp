@@ -92,7 +92,6 @@ public:
         return true;
     }
 
-    // Returns true if element was present.
     bool erase(const T& element) {
         array<Node*, max_levels> predecessors = {};
         Node* node = search(element, &predecessors)->next()[0];
@@ -219,7 +218,6 @@ private:
     dict::Xoshiro256 rng_{};
     mutable dict::OpCounters counters_{};
 
-    // Pass nullptr for predecessors when they aren't needed (lookups).
     Node* search(const T& element, array<Node*, max_levels>* predecessors) const {
         int8_t level = levels - 1;
         Node* current = head;
