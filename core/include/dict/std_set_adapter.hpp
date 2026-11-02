@@ -10,7 +10,6 @@
 // not expose node visits or rotations.
 
 #include <cstddef>
-#include <functional>
 #include <memory>
 #include <set>
 
@@ -18,7 +17,7 @@
 
 namespace dict {
 
-template <class K, class Compare = std::less<K>>
+template <class K>
 class StdSetAdapter {
 public:
     using key_type = K;
@@ -26,7 +25,7 @@ public:
     static constexpr const char* name = "std_set";
     static constexpr bool implemented = true;
 
-    StdSetAdapter() : counters_(std::make_unique<OpCounters>()), set_(CountingLess{counters_.get(), {}}) {}
+    StdSetAdapter() : counters_(std::make_unique<OpCounters>()), set_(CountingLess{counters_.get()}) {}
 
     bool insert(const K& key) { return set_.insert(key).second; }
 
@@ -59,10 +58,9 @@ private:
     // adapter stays movable without the comparator dangling.
     struct CountingLess {
         OpCounters* counters;
-        Compare less;
         bool operator()(const K& a, const K& b) const {
             DICT_COUNT(*counters, comparisons, 1);
-            return less(a, b);
+            return a < b;
         }
     };
 

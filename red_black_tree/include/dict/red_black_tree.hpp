@@ -20,7 +20,7 @@
 // Together these keep height <= 2 lg(n + 1).
 //
 // Counting (see dict/counters.hpp):
-//   comparisons  - every call to the comparator
+//   comparisons  - every key comparison (each use of <)
 //   node_visits  - every real node visited on a search path
 //   structural   - every rotation
 //   recolors     - every colour change
@@ -29,13 +29,14 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 
 #include "dict/counters.hpp"
 
 namespace dict {
 
-template <class K, class Compare = std::less<K>>
+// Keys are kept in ascending order using K's operator<, the only comparison
+// performed on keys.
+template <class K>
 class RedBlackTree {
 public:
     using key_type = K;
@@ -76,13 +77,13 @@ public:
             parent = x;
             Node* n = as_node(x);
             DICT_COUNT(counters_, comparisons, 1);
-            if (less_(key, n->key)) {
+            if (key < n->key) {
                 x = x->left;
                 went_left = true;
                 continue;
             }
             DICT_COUNT(counters_, comparisons, 1);
-            if (less_(n->key, key)) {
+            if (n->key < key) {
                 x = x->right;
                 went_left = false;
                 continue;
@@ -115,12 +116,12 @@ public:
             DICT_COUNT(counters_, node_visits, 1);
             const Node* n = as_node(x);
             DICT_COUNT(counters_, comparisons, 1);
-            if (less_(key, n->key)) {
+            if (key < n->key) {
                 x = x->left;
                 continue;
             }
             DICT_COUNT(counters_, comparisons, 1);
-            if (less_(n->key, key)) {
+            if (n->key < key) {
                 x = x->right;
                 continue;
             }
@@ -150,12 +151,12 @@ public:
             DICT_COUNT(counters_, node_visits, 1);
             Node* n = as_node(z);
             DICT_COUNT(counters_, comparisons, 1);
-            if (less_(key, n->key)) {
+            if (key < n->key) {
                 z = z->left;
                 continue;
             }
             DICT_COUNT(counters_, comparisons, 1);
-            if (less_(n->key, key)) {
+            if (n->key < key) {
                 z = z->right;
                 continue;
             }
@@ -241,14 +242,14 @@ public:
     void for_each_in_range(const K& lo, const K& hi, F&& visit) const {
         const NodeBase* first = &nil_;
         for (const NodeBase* x = root_; x != &nil_;) {
-            if (less_(as_node(x)->key, lo)) {
+            if (as_node(x)->key < lo) {
                 x = x->right;
             } else {
                 first = x;  // candidate; a smaller one may exist on the left
                 x = x->left;
             }
         }
-        for (const NodeBase* x = first; x != &nil_ && !less_(hi, as_node(x)->key); x = successor(x)) {
+        for (const NodeBase* x = first; x != &nil_ && !(hi < as_node(x)->key); x = successor(x)) {
             visit(as_node(x)->key);
         }
     }
@@ -542,8 +543,8 @@ private:
         if (x == &nil_) return 1;
         ++count;
         const Node* n = as_node(x);
-        if (lo && !less_(*lo, n->key)) return -1;  // BST: lo < key
-        if (hi && !less_(n->key, *hi)) return -1;  // BST: key < hi
+        if (lo && !(*lo < n->key)) return -1;  // BST: lo < key
+        if (hi && !(n->key < *hi)) return -1;  // BST: key < hi
         if (x->left != &nil_ && x->left->parent != x) return -1;
         if (x->right != &nil_ && x->right->parent != x) return -1;
         if (x->color == Color::Red &&
@@ -559,7 +560,6 @@ private:
     NodeBase nil_;
     NodeBase* root_ = &nil_;
     std::size_t size_ = 0;
-    Compare less_{};
     mutable OpCounters counters_{};
 };
 

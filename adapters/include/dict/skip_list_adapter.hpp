@@ -19,7 +19,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <stdexcept>
 #include <string>
 
@@ -28,7 +27,7 @@
 
 namespace dict {
 
-template <class K, class Compare = std::less<K>>
+template <class K>
 class SkipListAdapter {
 public:
     using key_type = K;
