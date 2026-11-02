@@ -16,6 +16,7 @@
 
 #include <gtest/gtest.h>
 
+#include "dict/counters.hpp"
 #include "skip_list.hpp"
 
 // ---- Empty list ------------------------------------------------------------
@@ -272,4 +273,72 @@ TEST(SkipListTypes, NotDefaultConstructible) {
 
     list.erase(NoDefault(1));
     EXPECT_FALSE(list.exists(NoDefault(1)));
+}
+
+// ---- Counters --------------------------------------------------------------
+// Built with DICT_INSTRUMENT (see CMakeLists.txt), so the counters are live.
+
+TEST(SkipListCounters, EmptyLookupCostsNothing) {
+    SkipList<int> list;
+    EXPECT_FALSE(list.exists(5));
+    EXPECT_EQ(list.counters().comparisons, 0u);
+    EXPECT_EQ(list.counters().node_visits, 0u);
+}
+
+TEST(SkipListCounters, ResetZeroesEverything) {
+    SkipList<int> list;
+    for (int i = 0; i < 50; ++i) {
+        list.insert(i);
+    }
+    EXPECT_GT(list.counters().comparisons, 0u);
+
+    list.reset_counters();
+    EXPECT_EQ(list.counters().comparisons, 0u);
+    EXPECT_EQ(list.counters().node_visits, 0u);
+    EXPECT_EQ(list.counters().structural, 0u);
+    EXPECT_EQ(list.counters().allocations, 0u);
+}
+
+TEST(SkipListCounters, OneAllocationPerNewKeyOnly) {
+    SkipList<int> list;
+    for (int i = 0; i < 100; ++i) {
+        list.insert(i);
+    }
+    EXPECT_EQ(list.counters().allocations, 100u);
+
+    const auto structural = list.counters().structural;
+    for (int i = 0; i < 100; ++i) {
+        list.insert(i);
+    }
+    EXPECT_EQ(list.counters().allocations, 100u);
+    EXPECT_EQ(list.counters().structural, structural);
+}
+
+// A node is unlinked from exactly the levels it was linked into.
+TEST(SkipListCounters, EraseSplicesMatchInsertSplices) {
+    SkipList<int> list;
+    for (int i = 0; i < 500; ++i) {
+        list.insert(i);
+    }
+    const auto linked = list.counters().structural;
+    EXPECT_GE(linked, 500u);
+
+    list.reset_counters();
+    for (int i = 0; i < 500; ++i) {
+        list.erase(i);
+    }
+    EXPECT_EQ(list.counters().structural, linked);
+}
+
+// With one node of height h, a lookup of it drops through all h levels,
+// comparing against the node at each one, then checks equality once.
+TEST(SkipListCounters, SingleNodeLookupCost) {
+    SkipList<int> list;
+    list.insert(7);
+    const auto height = list.counters().structural;
+
+    list.reset_counters();
+    EXPECT_TRUE(list.exists(7));
+    EXPECT_EQ(list.counters().node_visits, height);
+    EXPECT_EQ(list.counters().comparisons, height + 1);
 }

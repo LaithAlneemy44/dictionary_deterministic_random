@@ -14,7 +14,7 @@
 //   - check_invariants()
 //   - a constructor taking a seed (currently seeded from std::random_device,
 //     so runs are not reproducible)
-//   - counter hooks (DICT_COUNT) for the instrumented benchmark
+// Counters are already forwarded to the skip list.
 // Once SkipList provides these, forward to it here and set `implemented = true`.
 
 #include <cstddef>
@@ -56,8 +56,8 @@ public:
 
     bool check_invariants() const { not_implemented("check_invariants"); }
 
-    const OpCounters& counters() const { return counters_; }
-    void reset_counters() { counters_ = OpCounters{}; }
+    const OpCounters& counters() const { return list_.counters(); }
+    void reset_counters() { list_.reset_counters(); }
 
 private:
     [[noreturn]] static void not_implemented(const char* op) {
@@ -65,7 +65,6 @@ private:
     }
 
     SkipList<K> list_;
-    mutable OpCounters counters_{};
 };
 
 }  // namespace dict

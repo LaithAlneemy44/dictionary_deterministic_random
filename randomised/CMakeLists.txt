@@ -16,9 +16,12 @@ if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type" FORCE)
 endif()
 
-# Header-only library: just exposes this folder as an include path.
+# Header-only library: exposes this folder, plus the shared core headers for
+# dict/counters.hpp.
 add_library(skip_list INTERFACE)
-target_include_directories(skip_list INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(skip_list INTERFACE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/../core/include)
 
 if (MSVC)
   set(SKIP_LIST_WARNINGS /W4 /permissive-)
@@ -45,6 +48,8 @@ include(GoogleTest)
 add_executable(skip_list_tests tests/skip_list_tests.cpp)
 target_link_libraries(skip_list_tests PRIVATE skip_list GTest::gtest_main)
 target_compile_options(skip_list_tests PRIVATE ${SKIP_LIST_WARNINGS})
+# Count operations in the tests too, so the counter paths are compiled and tested.
+target_compile_definitions(skip_list_tests PRIVATE DICT_INSTRUMENT)
 gtest_discover_tests(skip_list_tests)
 
 # ---- include-what-you-use --------------------------------------------------

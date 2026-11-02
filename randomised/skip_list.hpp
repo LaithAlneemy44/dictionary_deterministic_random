@@ -10,6 +10,8 @@
 #include <random>
 #include <utility>
 
+#include "dict/counters.hpp"
+
 using namespace std;
 
 template<typename T>
@@ -64,12 +66,17 @@ public:
     void insert(const T& element) {
         auto [node, predecessors] = search(element);
         node = node->next()[0];
+        if (node) {
+            DICT_COUNT(counters_, comparisons, 1);
+        }
+
         if (node && node->data == element) {
             return;
         }
 
         const uint8_t height = random_height();
         Node* inserted = new (height) Node(element, height);
+        DICT_COUNT(counters_, allocations, 1);
         for (uint8_t level = 0; level < min(levels, height); ++level) {
             Node* next = predecessors[level]->next()[level];
             predecessors[level]->next()[level] = inserted;
@@ -80,12 +87,17 @@ public:
             head->next()[level] = inserted;
         }
 
+        DICT_COUNT(counters_, structural, height);
         levels = max(levels, height);
     }
 
     void erase(const T& element) {
         auto [node, predecessors] = search(element);
         node = node->next()[0];
+        if (node) {
+            DICT_COUNT(counters_, comparisons, 1);
+        }
+
         if (!node || node->data != element) {
             return;
         }
@@ -94,15 +106,28 @@ public:
             predecessors[level]->next()[level] = node->next()[level];
         }
 
+        DICT_COUNT(counters_, structural, node->height);
         delete node;
         while (levels > 0 && !head->next()[levels - 1]) {
             --levels;
         }
     }
 
-    bool exists(const T& element) {
+    bool exists(const T& element) const {
         Node* node = search(element).first->next()[0];
+        if (node) {
+            DICT_COUNT(counters_, comparisons, 1);
+        }
+
         return node && node->data == element;
+    }
+
+    const dict::OpCounters& counters() const {
+        return counters_;
+    }
+
+    void reset_counters() {
+        counters_ = dict::OpCounters{};
     }
 
 private:
@@ -111,12 +136,25 @@ private:
     Node* head = new (max_levels) Node(nullopt, max_levels);
     mt19937 gen{random_device{}()};
 
-    pair<Node*, array<Node*, max_levels>> search(const T& element) {
+    // Only counted when DICT_INSTRUMENT is defined (see dict/counters.hpp).
+    //   comparisons  - every key comparison
+    //   node_visits  - every step of the search: one move right or one level down
+    //   structural   - one splice per level a node is linked into or unlinked from
+    //   allocations  - every node allocated
+    // mutable so const lookups can count.
+    mutable dict::OpCounters counters_{};
+
+    pair<Node*, array<Node*, max_levels>> search(const T& element) const {
         array<Node*, max_levels> predecessors = {};
         int8_t level = levels - 1;
         Node* current = head;
         while (level >= 0) {
             Node* next = current->next()[level];
+            DICT_COUNT(counters_, node_visits, 1);
+            if (next) {
+                DICT_COUNT(counters_, comparisons, 1);
+            }
+
             if (!next || next->data >= element) {
                 predecessors[level] = current;
                 --level;
