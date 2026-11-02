@@ -61,7 +61,7 @@ public:
     SkipList& operator=(const SkipList&) = delete;
 
 
-    void insert(T element) {
+    void insert(const T& element) {
         auto [node, predecessors] = search(element);
         node = node->next()[0];
         if (node && node->data == element) {
@@ -83,7 +83,7 @@ public:
         levels = max(levels, height);
     }
 
-    void erase(T element) {
+    void erase(const T& element) {
         auto [node, predecessors] = search(element);
         node = node->next()[0];
         if (!node || node->data != element) {
@@ -100,7 +100,7 @@ public:
         }
     }
 
-    bool exists(T element) {
+    bool exists(const T& element) {
         Node* node = search(element).first->next()[0];
         return node && node->data == element;
     }
@@ -111,7 +111,7 @@ private:
     Node* head = new (max_levels) Node(nullopt, max_levels);
     mt19937 gen{random_device{}()};
 
-    pair<Node*, array<Node*, max_levels>> search(T element) {
+    pair<Node*, array<Node*, max_levels>> search(const T& element) {
         array<Node*, max_levels> predecessors = {};
         int8_t level = levels - 1;
         Node* current = head;
