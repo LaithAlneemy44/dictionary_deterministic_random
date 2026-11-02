@@ -1,0 +1,13 @@
+workload,phase,impl,structural_per_op,recolors_per_op
+reverse,insert,red_black_tree,0.999963,4.999816
+reverse,insert,skip_list,2.0003345,0.0
+sliding_window,churn,red_black_tree,0.46285825,1.69743375
+sliding_window,churn,skip_list,1.999432,0.0
+sliding_window,insert,red_black_tree,0.5820555000000001,2.318073
+sliding_window,insert,skip_list,2.0003345,0.0
+sorted,insert,red_black_tree,0.999963,4.999816
+sorted,insert,skip_list,2.0003345,0.0
+uniform,insert,red_black_tree,0.5820555000000001,2.318073
+uniform,insert,skip_list,2.0003345,0.0
+zipf,insert,red_black_tree,0.5820555000000001,2.318073
+zipf,insert,skip_list,2.0003345,0.0
