@@ -24,3 +24,19 @@ Reading the explanation as describing `search`'s return value made it look incor
 - At that node, `!less_(element, *node->data)` is the only check still needed for equality.
 
 **Lesson:** When an explanation depends on which variable or node is meant, check it against the code and name it exactly, e.g. "the value `search` returns" or "`node` after line 66".
+
+## 2026-11-03: Wrong explanation for the skip list's expensive writes
+
+**Person:** Laith
+
+**Tool:** Claude Code (Claude Opus 5.5)
+
+**Context:** Explaining why, in the `steady` workload, the skip list's cost of a write beyond its search was much higher than the red-black tree's from n = 3·10⁵ (insert 227 vs 134 ns, erase 139 vs 42 ns at 10⁶). Written into section 3 of `tests/theory_results.md`.
+
+**What the AI said:** A skip list write touches the predecessor at every level of the new node's tower, some of which "are not on the cached search path", so each is a cache miss once the structure outgrows the cache.
+
+**What was wrong:** The predecessor at each level is, by definition, the node where the search dropped down a level. The search has just read that node's key and its forward pointer at that level. So every pointer a write changes was read moments before and should still be in cache. The explanation contradicted how the search works.
+
+**How it was resolved:** The AI noticed the contradiction itself when asked how to test the inconclusive results, before any test was run. Section 3 was rewritten to name allocation and freeing (variable-size skip list nodes vs fixed-size tree nodes) as the remaining suspect, marked as untested, and a test was written for it (allocation counts per operation and `dict_alloc_bench`).
+
+**Lesson:** Check a performance explanation against the algorithm's own invariants before writing it down. "Not on the search path" was ruled out by the definition of a predecessor.
