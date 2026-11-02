@@ -49,7 +49,6 @@ public:
 
     }
 
-    // The same seed always gives the same tower heights for the same inserts.
     explicit SkipList(const uint64_t seed) : rng_{seed} {
 
     }
@@ -63,10 +62,9 @@ public:
     SkipList& operator=(const SkipList&) = delete;
 
 
-    // Returns true if element was new; a duplicate changes nothing.
     bool insert(const T& element) {
-        auto [node, predecessors] = search(element);
-        node = node->next()[0];
+        array<Node*, max_levels> predecessors = {};
+        Node* node = search(element, predecessors)->next()[0];
         if (node) {
             DICT_COUNT(counters_, comparisons, 1);
         }
@@ -96,8 +94,8 @@ public:
 
     // Returns true if element was present.
     bool erase(const T& element) {
-        auto [node, predecessors] = search(element);
-        node = node->next()[0];
+        array<Node*, max_levels> predecessors = {};
+        Node* node = search(element, predecessors)->next()[0];
         if (node) {
             DICT_COUNT(counters_, comparisons, 1);
         }
@@ -121,7 +119,8 @@ public:
     }
 
     bool exists(const T& element) const {
-        Node* node = search(element).first->next()[0];
+        array<Node*, max_levels> predecessors = {};
+        Node* node = search(element, predecessors)->next()[0];
         if (node) {
             DICT_COUNT(counters_, comparisons, 1);
         }
@@ -150,7 +149,6 @@ public:
         size_ = 0;
     }
 
-    // Visits every element in ascending order by walking level 0.
     template<typename F>
     void for_each(F&& visit) const {
         for (Node* node = head->next()[0]; node; node = node->next()[0]) {
@@ -158,10 +156,6 @@ public:
         }
     }
 
-    // Checks the whole structure. Not counted. Level 0 must be strictly
-    // ascending and hold size() nodes. Every higher level must link exactly the
-    // level-0 nodes tall enough to reach it, in the same order, so a node is
-    // never missing from, or linked above, its own height.
     bool check_invariants() const {
         for (uint8_t level = levels; level < max_levels; ++level) {
             if (head->next()[level]) {
@@ -224,17 +218,12 @@ private:
     size_t size_ = 0;
     Node* head = new (max_levels) Node(nullopt, max_levels);
     dict::Xoshiro256 rng_{};
-
-    // Only counted when DICT_INSTRUMENT is defined (see dict/counters.hpp).
-    //   comparisons  - every key comparison
-    //   node_visits  - every step of the search: one move right or one level down
-    //   structural   - one splice per level a node is linked into or unlinked from
-    //   allocations  - every node allocated
-    // mutable so const lookups can count.
     mutable dict::OpCounters counters_{};
 
-    pair<Node*, array<Node*, max_levels>> search(const T& element) const {
-        array<Node*, max_levels> predecessors = {};
+    // Fills the caller's predecessors (the last node before element at each
+    // level) and returns the level-0 predecessor. Writing into the caller's
+    // array avoids copying it back on every call.
+    Node* search(const T& element, array<Node*, max_levels>& predecessors) const {
         int8_t level = levels - 1;
         Node* current = head;
         while (level >= 0) {
@@ -254,7 +243,7 @@ private:
             }
         }
 
-        return {current, predecessors};
+        return current;
     }
 
     uint8_t random_height() {
