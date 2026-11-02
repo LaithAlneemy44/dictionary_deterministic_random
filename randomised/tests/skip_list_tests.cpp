@@ -342,3 +342,30 @@ TEST(SkipListCounters, SingleNodeLookupCost) {
     EXPECT_EQ(list.counters().node_visits, height);
     EXPECT_EQ(list.counters().comparisons, height + 1);
 }
+
+// ---- Seeding ---------------------------------------------------------------
+// The total splices from inserting the same keys is the sum of all tower
+// heights, so it acts as a fingerprint of the structure.
+
+namespace {
+
+unsigned long long heights_after_inserts(SkipList<int>& list) {
+    for (int i = 0; i < 1000; ++i) {
+        list.insert(i);
+    }
+    return list.counters().structural;
+}
+
+}  // namespace
+
+TEST(SkipListSeed, SameSeedSameStructure) {
+    SkipList<int> a(42);
+    SkipList<int> b(42);
+    EXPECT_EQ(heights_after_inserts(a), heights_after_inserts(b));
+}
+
+TEST(SkipListSeed, DifferentSeedsDifferentStructure) {
+    SkipList<int> a(1);
+    SkipList<int> b(2);
+    EXPECT_NE(heights_after_inserts(a), heights_after_inserts(b));
+}

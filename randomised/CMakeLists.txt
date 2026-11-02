@@ -17,11 +17,11 @@ if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 # Header-only library: exposes this folder, plus the shared core headers for
-# dict/counters.hpp.
+# dict/counters.hpp and dict/rng.hpp. The core headers are marked SYSTEM so
+# their warnings (e.g. __int128 under -Wpedantic) don't appear here.
 add_library(skip_list INTERFACE)
-target_include_directories(skip_list INTERFACE
-  ${CMAKE_CURRENT_SOURCE_DIR}
-  ${CMAKE_CURRENT_SOURCE_DIR}/../core/include)
+target_include_directories(skip_list INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(skip_list SYSTEM INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/../core/include)
 
 if (MSVC)
   set(SKIP_LIST_WARNINGS /W4 /permissive-)

@@ -12,9 +12,7 @@
 //   - size()
 //   - ordered iteration and range iteration (for_each, for_each_in_range)
 //   - check_invariants()
-//   - a constructor taking a seed (currently seeded from std::random_device,
-//     so runs are not reproducible)
-// Counters are already forwarded to the skip list.
+// The seed and counters are already forwarded to the skip list.
 // Once SkipList provides these, forward to it here and set `implemented = true`.
 
 #include <cstddef>
@@ -36,7 +34,7 @@ public:
     static constexpr bool implemented = false;
 
     SkipListAdapter() = default;
-    explicit SkipListAdapter(std::uint64_t /*seed*/) {}
+    explicit SkipListAdapter(std::uint64_t seed) : list_(seed) {}
 
     bool insert(const K& /*key*/) { not_implemented("insert"); }
     bool contains(const K& /*key*/) const { not_implemented("contains"); }

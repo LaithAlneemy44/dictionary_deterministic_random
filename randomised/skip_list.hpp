@@ -7,10 +7,10 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
-#include <random>
 #include <utility>
 
 #include "dict/counters.hpp"
+#include "dict/rng.hpp"
 
 using namespace std;
 
@@ -46,6 +46,11 @@ private:
 
 public:
     SkipList() {
+
+    }
+
+    // The same seed always gives the same tower heights for the same inserts.
+    explicit SkipList(const uint64_t seed) : rng_{seed} {
 
     }
 
@@ -134,7 +139,7 @@ private:
     static constexpr uint8_t max_levels = 32;
     uint8_t levels = 0;
     Node* head = new (max_levels) Node(nullopt, max_levels);
-    mt19937 gen{random_device{}()};
+    dict::Xoshiro256 rng_{};
 
     // Only counted when DICT_INSTRUMENT is defined (see dict/counters.hpp).
     //   comparisons  - every key comparison
@@ -169,7 +174,6 @@ private:
     }
 
     uint8_t random_height() {
-        const uint32_t x = static_cast<uint32_t>(gen());
-        return min(static_cast<uint8_t>(countr_zero(x) + 1), max_levels);
+        return min(static_cast<uint8_t>(countr_zero(rng_.next()) + 1), max_levels);
     }
 };
