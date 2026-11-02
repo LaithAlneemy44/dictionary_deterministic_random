@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <utility>
 
 #include "dict/counters.hpp"
@@ -14,12 +15,26 @@
 
 using namespace std;
 
-template<typename T>
+template<typename K, typename V>
 
 class SkipList {
 private:
+    struct Entry {
+        Entry(const K& in_key, const V& in_value) : key{in_key}, value{in_value} {
+
+        }
+
+        const K key;
+        V value;
+    };
+
     struct alignas(void*) Node {
-        Node(const optional<T>& in_data, const uint8_t in_height) : data{in_data}, height{in_height} {
+        Node(const K& key, const V& value, const uint8_t in_height) : data{in_place, key, value}, height{in_height} {
+            assert(height >= 1 && height <= max_levels);
+            uninitialized_fill_n(next(), height, nullptr);
+        }
+
+        explicit Node(const uint8_t in_height) : height{in_height} {
             assert(height >= 1 && height <= max_levels);
             uninitialized_fill_n(next(), height, nullptr);
         }
@@ -40,7 +55,7 @@ private:
             ::operator delete(memory);
         }
 
-        const optional<T> data;
+        optional<Entry> data;
         const uint8_t height;
     };
 
@@ -62,19 +77,20 @@ public:
     SkipList& operator=(const SkipList&) = delete;
 
 
-    bool insert(const T& element) {
+    bool insert(const K& key, const V& value) {
         array<Node*, max_levels> predecessors = {};
-        Node* node = search(element, &predecessors)->next()[0];
+        Node* node = search(key, &predecessors)->next()[0];
         if (node) {
             DICT_COUNT(counters_, comparisons, 1);
         }
 
-        if (node && node->data == element) {
+        if (node && node->data->key == key) {
+            node->data->value = value;
             return false;
         }
 
         const uint8_t height = random_height();
-        Node* inserted = new (height) Node(element, height);
+        Node* inserted = new (height) Node(key, value, height);
         DICT_COUNT(counters_, allocations, 1);
         for (uint8_t level = 0; level < min(levels, height); ++level) {
             Node* next = predecessors[level]->next()[level];
@@ -92,14 +108,14 @@ public:
         return true;
     }
 
-    bool erase(const T& element) {
+    bool erase(const K& key) {
         array<Node*, max_levels> predecessors = {};
-        Node* node = search(element, &predecessors)->next()[0];
+        Node* node = search(key, &predecessors)->next()[0];
         if (node) {
             DICT_COUNT(counters_, comparisons, 1);
         }
 
-        if (!node || node->data != element) {
+        if (!node || node->data->key != key) {
             return false;
         }
 
@@ -117,13 +133,31 @@ public:
         return true;
     }
 
-    bool exists(const T& element) const {
-        Node* node = search(element, nullptr)->next()[0];
-        if (node) {
-            DICT_COUNT(counters_, comparisons, 1);
+    bool exists(const K& key) const {
+        return find_node(key) != nullptr;
+    }
+
+    const V* find(const K& key) const {
+        Node* node = find_node(key);
+        return node ? &node->data->value : nullptr;
+    }
+
+    V& operator[](const K& key) {
+        Node* node = find_node(key);
+        if (!node) {
+            throw out_of_range("SkipList: key not found");
         }
 
-        return node && node->data == element;
+        return node->data->value;
+    }
+
+    const V& operator[](const K& key) const {
+        Node* node = find_node(key);
+        if (!node) {
+            throw out_of_range("SkipList: key not found");
+        }
+
+        return node->data->value;
     }
 
     size_t size() const {
@@ -150,7 +184,7 @@ public:
     template<typename F>
     void for_each(F&& visit) const {
         for (Node* node = head->next()[0]; node; node = node->next()[0]) {
-            visit(*node->data);
+            visit(node->data->key, node->data->value);
         }
     }
 
@@ -173,7 +207,7 @@ public:
             }
 
             Node* next = node->next()[0];
-            if (next && !(*node->data < *next->data)) {
+            if (next && !(node->data->key < next->data->key)) {
                 return false;
             }
         }
@@ -214,11 +248,11 @@ private:
     static constexpr uint8_t max_levels = 32;
     uint8_t levels = 0;
     size_t size_ = 0;
-    Node* head = new (max_levels) Node(nullopt, max_levels);
+    Node* head = new (max_levels) Node(max_levels);
     dict::Xoshiro256 rng_{};
     mutable dict::OpCounters counters_{};
 
-    Node* search(const T& element, array<Node*, max_levels>* predecessors) const {
+    Node* search(const K& key, array<Node*, max_levels>* predecessors) const {
         int8_t level = levels - 1;
         Node* current = head;
         while (level >= 0) {
@@ -228,7 +262,7 @@ private:
                 DICT_COUNT(counters_, comparisons, 1);
             }
 
-            if (!next || next->data >= element) {
+            if (!next || next->data->key >= key) {
                 if (predecessors) {
                     (*predecessors)[level] = current;
                 }
@@ -242,6 +276,15 @@ private:
         }
 
         return current;
+    }
+
+    Node* find_node(const K& key) const {
+        Node* node = search(key, nullptr)->next()[0];
+        if (node) {
+            DICT_COUNT(counters_, comparisons, 1);
+        }
+
+        return node && node->data->key == key ? node : nullptr;
     }
 
     uint8_t random_height() {
