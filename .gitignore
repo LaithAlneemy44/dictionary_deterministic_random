@@ -10,7 +10,9 @@ CMakeUserPresets.json
 *.user
 
 # Benchmark output. Commit final results deliberately with `git add -f results/<file>`.
-results/
+# Plots are always tracked.
+results/*
+!results/plots/
 
 # Python
 __pycache__/
