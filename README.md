@@ -2,7 +2,7 @@
 
 Advanced Algorithms, Programming Assignment 2 (Theme 2: Deterministic vs Randomized).
 
-We compare two ordered dictionaries, used as sets of unique keys (insert, lookup, erase, in-order and range iteration). Inserting a key that is already present changes nothing.
+We compare two ordered dictionaries, used as sets of unique keys (insert, lookup, erase). Inserting a key that is already present changes nothing.
 
 | Module | Algorithm | Kind | Primary author |
 |---|---|---|---|
@@ -53,7 +53,6 @@ Use `x64-debug` instead while developing. **Always benchmark the Release build.*
 
 - unit tests (empty set, duplicate insert, erase)
 - 50,000 random operations diffed step by step against the oracle
-- range queries
 - a replay of every benchmark workload
 
 Each implementation's `check_invariants()` is called throughout.

@@ -45,10 +45,8 @@ concept OrderedSet =
         { cs.empty() } -> std::same_as<bool>;
         { s.clear() };
 
-        // Visit every key in ascending order.
+        // Visit every key in ascending order. Used by tests only.
         { cs.for_each(visit) };
-        // Visit every key with lo <= key <= hi in ascending order.
-        { cs.for_each_in_range(k, k, visit) };
 
         // Full structural self-check (e.g. red-black properties, heap or level ordering). Used by tests only.
         { cs.check_invariants() } -> std::same_as<bool>;

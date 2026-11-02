@@ -236,24 +236,6 @@ public:
         }
     }
 
-    // Visit every key with lo <= key <= hi in ascending order: find
-    // the first key >= lo (lower bound), then walk successors until key > hi.
-    template <class F>
-    void for_each_in_range(const K& lo, const K& hi, F&& visit) const {
-        const NodeBase* first = &nil_;
-        for (const NodeBase* x = root_; x != &nil_;) {
-            if (as_node(x)->key < lo) {
-                x = x->right;
-            } else {
-                first = x;  // candidate; a smaller one may exist on the left
-                x = x->left;
-            }
-        }
-        for (const NodeBase* x = first; x != &nil_ && !(hi < as_node(x)->key); x = successor(x)) {
-            visit(as_node(x)->key);
-        }
-    }
-
     // Verifies all five red-black properties, strict BST ordering, parent
     // links, and that the number of reachable nodes equals size().
     bool check_invariants() const {

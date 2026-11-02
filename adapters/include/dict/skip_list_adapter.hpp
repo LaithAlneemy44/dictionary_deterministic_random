@@ -10,7 +10,7 @@
 // insert / erase / exists. The shared harness additionally needs:
 //   - insert/erase reporting whether the key was new / present
 //   - size()
-//   - ordered iteration and range iteration (for_each, for_each_in_range)
+//   - ordered iteration (for_each)
 //   - check_invariants()
 // The seed and counters are already forwarded to the skip list.
 // Once SkipList provides these, forward to it here and set `implemented = true`.
@@ -46,11 +46,6 @@ public:
 
     template <class F>
     void for_each(F&& /*visit*/) const { not_implemented("for_each"); }
-
-    template <class F>
-    void for_each_in_range(const K& /*lo*/, const K& /*hi*/, F&& /*visit*/) const {
-        not_implemented("for_each_in_range");
-    }
 
     bool check_invariants() const { not_implemented("check_invariants"); }
 

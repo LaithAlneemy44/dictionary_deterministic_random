@@ -12,7 +12,6 @@
 #include <set>
 #include <string>
 #include <string_view>
-#include <utility>
 #include <vector>
 
 #include "dict/ordered_set.hpp"
@@ -124,25 +123,6 @@ void test_differential_random() {
     CHECK(contents(s) == contents(oracle));
 }
 
-template <class S>
-void test_range_queries() {
-    S s = fresh<S>();
-    std::set<Key> oracle;
-    dict::Xoshiro256 rng(7);
-    for (int i = 0; i < 5'000; ++i) {
-        const Key k = rng.below(100'000);
-        s.insert(k);
-        oracle.insert(k);
-    }
-    for (int q = 0; q < 500; ++q) {
-        Key lo = rng.below(100'000), hi = rng.below(100'000);
-        if (lo > hi) std::swap(lo, hi);
-        std::vector<Key> got, want(oracle.lower_bound(lo), oracle.upper_bound(hi));
-        s.for_each_in_range(lo, hi, [&](const Key& k) { got.push_back(k); });
-        CHECK(got == want);
-    }
-}
-
 // Replays every benchmark workload family at small n against the oracle,
 // checking invariants at each phase boundary.
 template <class S>
@@ -223,7 +203,6 @@ void run_suite(Totals& t) {
         run_one(t, S::name, "insert_duplicate", test_insert_duplicate<S>);
         run_one(t, S::name, "erase", test_erase<S>);
         run_one(t, S::name, "differential_random", test_differential_random<S>);
-        run_one(t, S::name, "range_queries", test_range_queries<S>);
         run_one(t, S::name, "workloads", test_workloads<S>);
     }
 }

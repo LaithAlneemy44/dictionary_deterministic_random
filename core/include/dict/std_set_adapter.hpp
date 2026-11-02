@@ -42,12 +42,6 @@ public:
         for (const K& k : set_) visit(k);
     }
 
-    template <class F>
-    void for_each_in_range(const K& lo, const K& hi, F&& visit) const {
-        auto last = set_.upper_bound(hi);
-        for (auto it = set_.lower_bound(lo); it != last; ++it) visit(*it);
-    }
-
     bool check_invariants() const { return true; }
 
     const OpCounters& counters() const { return *counters_; }
