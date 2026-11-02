@@ -1,7 +1,7 @@
 #pragma once
 
-// Red-black tree (deterministic balanced BST), used as an ordered set of
-// unique keys.
+// Red-black tree (deterministic balanced BST), used as a dictionary: unique
+// keys, each mapped to a value.
 //
 // Primary author: Aaron Falco
 //
@@ -29,6 +29,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <stdexcept>
 
 #include "dict/counters.hpp"
 
@@ -36,10 +37,11 @@ namespace dict {
 
 // Keys are kept in ascending order using K's operator<, the only comparison
 // performed on keys.
-template <class K>
+template <class K, class V>
 class RedBlackTree {
 public:
     using key_type = K;
+    using mapped_type = V;
 
     static constexpr const char* name = "red_black_tree";
     static constexpr bool implemented = true;
@@ -53,22 +55,22 @@ public:
 
     // Every node's leaf links point at this tree's own nil_, so a copied or
     // moved tree would still point into the original object. Copying and
-    // moving are disabled. (Construction from a prvalue, as in make_set, is
+    // moving are disabled. (Construction from a prvalue, as in make_map, is
     // still fine: C++17 guaranteed copy elision builds the object in place.)
     RedBlackTree(const RedBlackTree&) = delete;
     RedBlackTree& operator=(const RedBlackTree&) = delete;
     RedBlackTree(RedBlackTree&&) = delete;
     RedBlackTree& operator=(RedBlackTree&&) = delete;
 
-    // Insert key. Returns true if it was new; if it is already present, nothing
-    // changes and this returns false.
+    // Insert key -> value, or overwrite the value if key is already present.
+    // Returns true if the key was new.
     //
     // CLRS RB-INSERT: an ordinary BST insert that colours the new node red,
     // followed by insert_fixup() to repair the one property that can break.
     // Why red: a new red node keeps every black height unchanged (property 5).
     // The only possible violation is a red node with a red parent (property 4),
     // or a red root (property 2) when the tree was empty.
-    bool insert(const K& key) {
+    bool insert(const K& key, const V& value) {
         NodeBase* parent = &nil_;
         NodeBase* x = root_;
         bool went_left = false;
@@ -88,10 +90,11 @@ public:
                 went_left = false;
                 continue;
             }
-            return false;  // key already present: nothing changes
+            n->value = value;  // key already present: overwrite, structure unchanged
+            return false;
         }
 
-        Node* z = new Node(key);
+        Node* z = new Node(key, value);
         DICT_COUNT(counters_, allocations, 1);
         z->parent = parent;
         z->left = z->right = &nil_;
@@ -108,26 +111,26 @@ public:
         return true;
     }
 
-    // Standard BST search. A three-way decision with only `<` available costs
-    // up to two comparisons per node: key < x, then x < key (equal if neither).
-    bool contains(const K& key) const {
-        const NodeBase* x = root_;
-        while (x != &nil_) {
-            DICT_COUNT(counters_, node_visits, 1);
-            const Node* n = as_node(x);
-            DICT_COUNT(counters_, comparisons, 1);
-            if (key < n->key) {
-                x = x->left;
-                continue;
-            }
-            DICT_COUNT(counters_, comparisons, 1);
-            if (n->key < key) {
-                x = x->right;
-                continue;
-            }
-            return true;
-        }
-        return false;
+    // Pointer to the value for key, or nullptr if absent.
+    const V* find(const K& key) const {
+        const Node* n = find_node(key);
+        return n ? &n->value : nullptr;
+    }
+
+    bool contains(const K& key) const { return find_node(key) != nullptr; }
+
+    // Reference to the value for key. Throws std::out_of_range if key is
+    // absent; never inserts.
+    V& operator[](const K& key) {
+        Node* n = find_node(key);
+        if (!n) throw std::out_of_range("RedBlackTree: key not found");
+        return n->value;
+    }
+
+    const V& operator[](const K& key) const {
+        const Node* n = find_node(key);
+        if (!n) throw std::out_of_range("RedBlackTree: key not found");
+        return n->value;
     }
 
     // Remove key. Returns true if it was present.
@@ -140,7 +143,8 @@ public:
     //     subtree. y has no left child, so it is removed from its own spot
     //     (x = y->right takes it) and then relinked into z's place, taking z's
     //     colour. Relinking the node, rather than copying y's key into z,
-    //     matters here: `key` is const, so it cannot be copied.
+    //     matters here: `key` is const, and copying would also invalidate the
+    //     value pointer that find() handed out for y.
     // If y was red, removing it from its old spot changes no black height and
     // cannot create a red-red pair, so nothing needs fixing. If y was black,
     // every path through x has lost one black node, and delete_fixup(x)
@@ -226,13 +230,14 @@ public:
         size_ = 0;
     }
 
-    // Visit every key in ascending order using parent pointers (successor
-    // walk), so no stack is needed.
+    // Visit every (key, value) in ascending order using parent pointers
+    // (successor walk), so no stack is needed.
     template <class F>
     void for_each(F&& visit) const {
         if (root_ == &nil_) return;
         for (const NodeBase* x = minimum(root_); x != &nil_; x = successor(x)) {
-            visit(as_node(x)->key);
+            const Node* n = as_node(x);
+            visit(n->key, n->value);
         }
     }
 
@@ -255,8 +260,8 @@ private:
     enum class Color : std::uint8_t { Red, Black };
 
     // Links and colour live in a base struct so the sentinel can exist
-    // without a key. That way K need not be default-constructible. Real nodes
-    // derive from it and add the key.
+    // without a key or value. That way K and V need not be
+    // default-constructible. Real nodes derive from it and add the payload.
     struct NodeBase {
         NodeBase* left;
         NodeBase* right;
@@ -265,13 +270,38 @@ private:
     };
 
     struct Node : NodeBase {
-        explicit Node(const K& k) : NodeBase{}, key(k) {}
+        Node(const K& k, const V& v) : NodeBase{}, key(k), value(v) {}
         const K key;  // never changes after insertion, which protects the BST ordering
+        V value;
     };
 
     // Downcast a link to a real node. Never call this on &nil_.
     static Node* as_node(NodeBase* x) { return static_cast<Node*>(x); }
     static const Node* as_node(const NodeBase* x) { return static_cast<const Node*>(x); }
+
+    // Standard BST search, shared by find(), contains() and operator[]. A
+    // three-way decision with only `<` available costs up to two comparisons
+    // per node: key < x, then x < key (equal if neither). Returns nullptr if
+    // key is absent.
+    Node* find_node(const K& key) const {
+        NodeBase* x = root_;
+        while (x != &nil_) {
+            DICT_COUNT(counters_, node_visits, 1);
+            Node* n = as_node(x);
+            DICT_COUNT(counters_, comparisons, 1);
+            if (key < n->key) {
+                x = x->left;
+                continue;
+            }
+            DICT_COUNT(counters_, comparisons, 1);
+            if (n->key < key) {
+                x = x->right;
+                continue;
+            }
+            return n;
+        }
+        return nullptr;
+    }
 
     // Changes a node's colour, counting it only if the colour actually changes.
     void set_color(NodeBase* x, Color c) {

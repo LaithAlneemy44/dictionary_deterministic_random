@@ -1,5 +1,5 @@
 # Integration glue: exposes Laith's header-only skip list (randomised/) to the
-# shared tests and benchmarks through the OrderedSet interface.
+# shared tests and benchmarks through the OrderedMap interface.
 #
 # randomised/ keeps its own standalone CMake project (with GoogleTest) for
 # Laith's unit tests; it is deliberately not add_subdirectory'd here.

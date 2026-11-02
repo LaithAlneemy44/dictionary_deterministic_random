@@ -1,7 +1,7 @@
-// Correctness tests, written once against dict::OrderedSet and run for every
-// implementation. The oracle is std::set.
+// Correctness tests, written once against dict::OrderedMap and run for every
+// implementation. The oracle is std::map.
 //
-// Usage: dict_tests [std_set|red_black_tree|skip_list|all]
+// Usage: dict_tests [std_map|red_black_tree|skip_list|all]
 //
 // An implementation with `implemented == false` is reported as SKIPPED.
 
@@ -9,21 +9,24 @@
 #include <cstdio>
 #include <exception>
 #include <functional>
-#include <set>
+#include <map>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
-#include "dict/ordered_set.hpp"
+#include "dict/ordered_map.hpp"
 #include "dict/red_black_tree.hpp"
 #include "dict/rng.hpp"
 #include "dict/skip_list_adapter.hpp"
-#include "dict/std_set_adapter.hpp"
+#include "dict/std_map_adapter.hpp"
 #include "dict/workloads.hpp"
 
 namespace {
 
 using dict::Key;
+using dict::Value;
 
 // Returned when everything selected was skipped; CTest reports it as "Skipped" (see tests/CMakeLists.txt).
 constexpr int kSkipReturnCode = 77;
@@ -38,117 +41,156 @@ struct TestFailure {
                                        ": CHECK(" #cond ") failed"};                        \
     } while (0)
 
-template <class S>
-std::vector<Key> contents(const S& s) {
-    std::vector<Key> out;
-    s.for_each([&](const Key& k) { out.push_back(k); });
+template <class M>
+std::vector<std::pair<Key, Value>> contents(const M& m) {
+    std::vector<std::pair<Key, Value>> out;
+    m.for_each([&](const Key& k, const Value& v) { out.emplace_back(k, v); });
     return out;
 }
 
-std::vector<Key> contents(const std::set<Key>& s) {
-    return {s.begin(), s.end()};
+std::vector<std::pair<Key, Value>> contents(const std::map<Key, Value>& m) {
+    return {m.begin(), m.end()};
 }
 
-template <class S>
-S fresh() {
-    return dict::make_set<S>(12345);
+template <class M>
+M fresh() {
+    return dict::make_map<M>(12345);
+}
+
+// True if evaluating f() throws std::out_of_range.
+template <class F>
+bool throws_out_of_range(F&& f) {
+    try {
+        f();
+    } catch (const std::out_of_range&) {
+        return true;
+    }
+    return false;
 }
 
 // ---- Tests -----------------------------------------------------------------
 
-template <class S>
+template <class M>
 void test_empty() {
-    S s = fresh<S>();
-    CHECK(s.empty());
-    CHECK(s.size() == 0);
-    CHECK(!s.contains(42));
-    CHECK(!s.erase(42));
-    CHECK(contents(s).empty());
-    CHECK(s.check_invariants());
+    M m = fresh<M>();
+    CHECK(m.empty());
+    CHECK(m.size() == 0);
+    CHECK(m.find(42) == nullptr);
+    CHECK(!m.contains(42));
+    CHECK(!m.erase(42));
+    CHECK(contents(m).empty());
+    CHECK(m.check_invariants());
 }
 
-template <class S>
-void test_insert_duplicate() {
-    S s = fresh<S>();
-    CHECK(s.insert(5));
-    CHECK(s.insert(3));
-    CHECK(s.insert(8));
-    CHECK(s.size() == 3);
-    CHECK(s.contains(3));
-    CHECK(!s.contains(4));
-    CHECK(!s.insert(3));  // duplicate returns false and changes nothing
-    CHECK(s.size() == 3);
-    CHECK(s.contains(3));
-    CHECK(contents(s) == std::vector<Key>({3, 5, 8}));
-    CHECK(s.check_invariants());
+template <class M>
+void test_insert_find_update() {
+    M m = fresh<M>();
+    CHECK(m.insert(5, 50));
+    CHECK(m.insert(3, 30));
+    CHECK(m.insert(8, 80));
+    CHECK(m.size() == 3);
+    CHECK(m.find(3) != nullptr && *m.find(3) == 30);
+    CHECK(m.find(4) == nullptr);
+    CHECK(!m.insert(3, 31));  // overwrite returns false
+    CHECK(m.size() == 3);
+    CHECK(*m.find(3) == 31);
+    CHECK(m.check_invariants());
 }
 
-template <class S>
+// operator[] reads and writes existing values, throws for missing keys, and
+// never inserts.
+template <class M>
+void test_subscript() {
+    M m = fresh<M>();
+    m.insert(1, 10);
+    m.insert(2, 20);
+    CHECK(m[1] == 10);
+    m[2] = 25;
+    CHECK(*m.find(2) == 25);
+
+    const M& cm = m;
+    CHECK(cm[2] == 25);
+
+    CHECK(throws_out_of_range([&] { (void)m[3]; }));
+    CHECK(throws_out_of_range([&] { (void)cm[3]; }));
+    CHECK(m.size() == 2);
+    CHECK(!m.contains(3));
+    CHECK(m.check_invariants());
+}
+
+template <class M>
 void test_erase() {
-    S s = fresh<S>();
-    for (Key k = 0; k < 100; ++k) s.insert(k);
-    for (Key k = 0; k < 100; k += 2) CHECK(s.erase(k));
-    CHECK(!s.erase(0));
-    CHECK(s.size() == 50);
-    for (Key k = 0; k < 100; ++k) CHECK(s.contains(k) == (k % 2 == 1));
-    CHECK(s.check_invariants());
-    s.clear();
-    CHECK(s.empty());
-    CHECK(s.check_invariants());
+    M m = fresh<M>();
+    for (Key k = 0; k < 100; ++k) m.insert(k, k * 10);
+    for (Key k = 0; k < 100; k += 2) CHECK(m.erase(k));
+    CHECK(!m.erase(0));
+    CHECK(m.size() == 50);
+    for (Key k = 0; k < 100; ++k) CHECK(m.contains(k) == (k % 2 == 1));
+    CHECK(m.check_invariants());
+    m.clear();
+    CHECK(m.empty());
+    CHECK(m.check_invariants());
 }
 
-// Random insert/contains/erase over a small key range (so duplicates and
-// erase-of-absent are frequent), compared step by step against std::set.
-template <class S>
+// Random insert/find/erase over a small key range (so collisions and
+// erase-of-absent are frequent), compared step by step against std::map.
+template <class M>
 void test_differential_random() {
-    S s = fresh<S>();
-    std::set<Key> oracle;
+    M m = fresh<M>();
+    std::map<Key, Value> oracle;
     dict::Xoshiro256 rng(2024);
     for (int i = 0; i < 50'000; ++i) {
         const Key k = rng.below(2'000);
         switch (rng.below(3)) {
-            case 0:
-                CHECK(s.insert(k) == oracle.insert(k).second);
+            case 0: {
+                const Value v = rng.next();
+                const bool fresh_key = oracle.insert_or_assign(k, v).second;
+                CHECK(m.insert(k, v) == fresh_key);
                 break;
-            case 1:
-                CHECK(s.contains(k) == oracle.contains(k));
+            }
+            case 1: {
+                auto it = oracle.find(k);
+                const Value* got = m.find(k);
+                CHECK((got == nullptr) == (it == oracle.end()));
+                if (got) CHECK(*got == it->second);
                 break;
+            }
             default:
-                CHECK(s.erase(k) == (oracle.erase(k) == 1));
+                CHECK(m.erase(k) == (oracle.erase(k) == 1));
         }
-        CHECK(s.size() == oracle.size());
-        if (i % 1'000 == 0) CHECK(s.check_invariants());
+        CHECK(m.size() == oracle.size());
+        if (i % 1'000 == 0) CHECK(m.check_invariants());
     }
-    CHECK(s.check_invariants());
-    CHECK(contents(s) == contents(oracle));
+    CHECK(m.check_invariants());
+    CHECK(contents(m) == contents(oracle));
 }
 
 // Replays every benchmark workload family at small n against the oracle,
 // checking invariants at each phase boundary.
-template <class S>
+template <class M>
 void test_workloads() {
     for (std::string_view family : dict::workload_families()) {
         const dict::Workload w = dict::make_workload(family, 3'000, 99);
-        S s = fresh<S>();
-        std::set<Key> oracle;
+        M m = fresh<M>();
+        std::map<Key, Value> oracle;
         for (const dict::Phase& phase : w.phases) {
             for (const dict::Op& op : phase.ops) {
                 switch (op.kind) {
                     case dict::OpKind::Insert:
-                        CHECK(s.insert(op.key) == oracle.insert(op.key).second);
+                        CHECK(m.insert(op.key, op.key) == oracle.insert_or_assign(op.key, op.key).second);
                         break;
                     case dict::OpKind::Find:
-                        CHECK(s.contains(op.key) == oracle.contains(op.key));
+                        CHECK(m.contains(op.key) == oracle.contains(op.key));
                         break;
                     case dict::OpKind::Erase:
-                        CHECK(s.erase(op.key) == (oracle.erase(op.key) == 1));
+                        CHECK(m.erase(op.key) == (oracle.erase(op.key) == 1));
                         break;
                 }
             }
-            CHECK(s.size() == oracle.size());
-            CHECK(s.check_invariants());
+            CHECK(m.size() == oracle.size());
+            CHECK(m.check_invariants());
         }
-        CHECK(contents(s) == contents(oracle));
+        CHECK(contents(m) == contents(oracle));
     }
 }
 
@@ -166,8 +208,8 @@ void test_infrastructure() {
         for (std::size_t i = 0; i < w1.phases[p].ops.size(); ++i)
             CHECK(w1.phases[p].ops[i].key == w2.phases[p].ops[i].key);
 
-    std::set<Key> seen;
-    for (const dict::Op& op : w1.phases[0].ops) CHECK(seen.insert(op.key).second);  // distinct keys
+    std::map<Key, int> seen;
+    for (const dict::Op& op : w1.phases[0].ops) CHECK(++seen[op.key] == 1);  // distinct keys
 }
 
 // ---- Runner ----------------------------------------------------------------
@@ -192,18 +234,19 @@ void run_one(Totals& t, std::string_view suite, std::string_view test, const std
     }
 }
 
-template <dict::OrderedSet S>
+template <dict::OrderedMap M>
 void run_suite(Totals& t) {
-    std::printf("[%s]\n", S::name);
-    if constexpr (!S::implemented) {
+    std::printf("[%s]\n", M::name);
+    if constexpr (!M::implemented) {
         ++t.skipped;
         std::printf("  SKIP  not implemented yet (set `implemented = true` when ready)\n");
     } else {
-        run_one(t, S::name, "empty", test_empty<S>);
-        run_one(t, S::name, "insert_duplicate", test_insert_duplicate<S>);
-        run_one(t, S::name, "erase", test_erase<S>);
-        run_one(t, S::name, "differential_random", test_differential_random<S>);
-        run_one(t, S::name, "workloads", test_workloads<S>);
+        run_one(t, M::name, "empty", test_empty<M>);
+        run_one(t, M::name, "insert_find_update", test_insert_find_update<M>);
+        run_one(t, M::name, "subscript", test_subscript<M>);
+        run_one(t, M::name, "erase", test_erase<M>);
+        run_one(t, M::name, "differential_random", test_differential_random<M>);
+        run_one(t, M::name, "workloads", test_workloads<M>);
     }
 }
 
@@ -217,9 +260,9 @@ int main(int argc, char** argv) {
         std::printf("[infrastructure]\n");
         run_one(t, "infrastructure", "rng_and_workloads", test_infrastructure);
     }
-    if (which == "std_set" || which == "all") run_suite<dict::StdSetAdapter<Key>>(t);
-    if (which == "red_black_tree" || which == "all") run_suite<dict::RedBlackTree<Key>>(t);
-    if (which == "skip_list" || which == "all") run_suite<dict::SkipListAdapter<Key>>(t);
+    if (which == "std_map" || which == "all") run_suite<dict::StdMapAdapter<Key, Value>>(t);
+    if (which == "red_black_tree" || which == "all") run_suite<dict::RedBlackTree<Key, Value>>(t);
+    if (which == "skip_list" || which == "all") run_suite<dict::SkipListAdapter<Key, Value>>(t);
 
     std::printf("\n%d passed, %d failed, %d skipped\n", t.passed, t.failed, t.skipped);
     if (t.failed > 0) return 1;

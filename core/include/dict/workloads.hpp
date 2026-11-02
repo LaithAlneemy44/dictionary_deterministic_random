@@ -20,6 +20,7 @@
 namespace dict {
 
 using Key = std::uint64_t;
+using Value = std::uint64_t;
 
 enum class OpKind : std::uint8_t { Insert, Find, Erase };
 
