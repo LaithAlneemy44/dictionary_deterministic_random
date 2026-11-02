@@ -22,6 +22,9 @@
 //
 // Key types (--key): int, small_string (fits the small string buffer, no heap
 // allocation) and large_string (always heap allocated). See dict/keys.hpp.
+// The instrumented build also accepts probe, a key that orders like int and
+// records the distinct stored keys each operation reads (dict/probe_key.hpp),
+// written as the distinct_keys histogram.
 
 #include <algorithm>
 #include <chrono>
@@ -49,6 +52,7 @@
 
 #include "dict/keys.hpp"
 #include "dict/ordered_map.hpp"
+#include "dict/probe_key.hpp"
 #include "dict/red_black_tree.hpp"
 #include "dict/skip_list_adapter.hpp"
 #include "dict/std_map_adapter.hpp"
@@ -143,8 +147,10 @@ std::vector<std::string> split(const std::string& s) {
     std::fprintf(stderr,
                  "usage: dict_bench [options]\n"
                  "  --impl LIST          comma list of std_map,red_black_tree,skip_list (default all)\n"
-                 "  --key LIST           comma list of int,small_string,large_string, or 'all' (default int)\n"
-                 "  --workload LIST      comma list of uniform,sorted,reverse,sliding_window,zipf, or 'all'\n"
+                 "  --key LIST           comma list of int,small_string,large_string, or 'all' (default int);\n"
+                 "                       the instrumented build also accepts probe (records distinct keys read)\n"
+                 "  --workload LIST      comma list of uniform,sorted,reverse,sliding_window,zipf,zipf_shuffled,\n"
+                 "                       steady, or 'all'\n"
                  "  --n LIST             comma list of sizes (default 100000)\n"
                  "  --input-seeds K      number of distinct input seeds (default 1)\n"
                  "  --algo-seeds S       number of algorithm seeds per input (default 1)\n"
@@ -190,10 +196,14 @@ Options parse(int argc, char** argv) {
         else if (a == "--mem-out") o.mem_out = next();
         else usage(("unknown flag: " + std::string(a)).c_str());
     }
-    for (const auto& k : o.keys)
-        if (std::find(dict::key_kind_names().begin(), dict::key_kind_names().end(), k) ==
-            dict::key_kind_names().end())
+    for (const auto& k : o.keys) {
+        if (k == "probe") {
+            if (!kInstrumented) usage("--key probe needs the instrumented build (dict_bench_instrumented)");
+        } else if (std::find(dict::key_kind_names().begin(), dict::key_kind_names().end(), k) ==
+                   dict::key_kind_names().end()) {
             usage(("unknown key type: " + k).c_str());
+        }
+    }
     return o;
 }
 
@@ -216,6 +226,9 @@ template <class K>
 K convert_key(Key k, dict::KeyKind kind) {
     if constexpr (std::is_same_v<K, std::string>) {
         return kind == dict::KeyKind::LargeString ? dict::large_string_key(k) : dict::small_string_key(k);
+    } else if constexpr (std::is_same_v<K, dict::ProbeKey>) {
+        (void)kind;
+        return dict::ProbeKey(k);
     } else {
         (void)kind;
         return k;
@@ -306,7 +319,7 @@ TickScale calibrate_ticks() {
 using Histogram = std::map<std::uint64_t, std::uint64_t>;
 
 struct PhaseHistograms {
-    Histogram comparisons, node_visits, structural;
+    Histogram comparisons, node_visits, structural, distinct_keys;  // distinct_keys: probe keys only
 };
 
 struct Context {
@@ -345,13 +358,16 @@ void run_impl(Context& ctx, const RunInfo& r, const std::vector<TypedPhase<typen
 
             const auto t0 = std::chrono::steady_clock::now();
             if constexpr (kInstrumented) {
+                constexpr bool kProbe = std::is_same_v<typename M::key_type, dict::ProbeKey>;
                 for (const auto& op : phase.ops) {
                     const dict::OpCounters before = m.counters();
+                    if constexpr (kProbe) dict::probe::begin(&op.key);
                     checksum += apply(m, op);
                     const dict::OpCounters d = m.counters() - before;
                     ++h.comparisons[d.comparisons];
                     ++h.node_visits[d.node_visits];
                     ++h.structural[d.structural];
+                    if constexpr (kProbe) ++h.distinct_keys[dict::probe::read.size()];
                 }
             } else {
                 for (const auto& op : phase.ops) checksum += apply(m, op);
@@ -380,6 +396,7 @@ void run_impl(Context& ctx, const RunInfo& r, const std::vector<TypedPhase<typen
                 dump("comparisons", h.comparisons);
                 dump("node_visits", h.node_visits);
                 dump("structural", h.structural);
+                dump("distinct_keys", h.distinct_keys);
             }
         }
     }
@@ -481,10 +498,10 @@ void warn_if_stub(const Options& o) {
 // Converts the workload to key type K once, then runs every selected
 // implementation for every algorithm seed.
 template <class K>
-void run_key(Context& ctx, const dict::Workload& w, dict::KeyKind kind) {
+void run_key(Context& ctx, const dict::Workload& w, dict::KeyKind kind, const char* key_name) {
     const auto phases = convert<K>(w, kind);
     for (std::uint64_t as = 0; as < ctx.opt.algo_seeds; ++as) {
-        const RunInfo r{dict::key_kind_name(kind), w, 1'000'000 + as};
+        const RunInfo r{key_name, w, 1'000'000 + as};
         std::fprintf(stderr, "%s %s n=%zu input_seed=%llu algo_seed=%llu\n", r.key, w.family.c_str(), w.n,
                      static_cast<unsigned long long>(w.input_seed), static_cast<unsigned long long>(r.algo_seed));
         run_if_selected<dict::StdMapAdapter<K, Value>>(ctx, r, phases);
@@ -555,8 +572,9 @@ int main(int argc, char** argv) {
             for (std::size_t n : opt.sizes) {
                 for (std::uint64_t is = 0; is < opt.input_seeds; ++is) {
                     const dict::Workload w = dict::make_workload(family, n, 1'000 + is);
-                    if (kind == dict::KeyKind::Int) run_key<Key>(ctx, w, kind);
-                    else run_key<std::string>(ctx, w, kind);
+                    if (key == "probe") run_key<dict::ProbeKey>(ctx, w, kind, "probe");
+                    else if (kind == dict::KeyKind::Int) run_key<Key>(ctx, w, kind, dict::key_kind_name(kind));
+                    else run_key<std::string>(ctx, w, kind, dict::key_kind_name(kind));
                 }
             }
         }

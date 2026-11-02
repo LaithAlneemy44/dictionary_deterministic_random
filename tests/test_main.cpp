@@ -10,6 +10,7 @@
 #include <exception>
 #include <functional>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -18,6 +19,7 @@
 
 #include "dict/keys.hpp"
 #include "dict/ordered_map.hpp"
+#include "dict/probe_key.hpp"
 #include "dict/red_black_tree.hpp"
 #include "dict/rng.hpp"
 #include "dict/skip_list_adapter.hpp"
@@ -262,6 +264,93 @@ void test_infrastructure() {
     for (const dict::Op& op : w1.phases[0].ops) CHECK(++seen[op.key] == 1);  // distinct keys
 }
 
+// The workload families built to test specific explanations do what they claim.
+void test_workload_shapes() {
+    const std::size_t n = 4'000;
+
+    // sorted / reverse: exactly half the lookups hit, and misses fall inside the key range.
+    for (std::string_view family : {"sorted", "reverse"}) {
+        const dict::Workload w = dict::make_workload(family, n, 7);
+        std::set<Key> present;
+        for (const dict::Op& op : w.phases[0].ops) present.insert(op.key);
+        std::size_t hits = 0;
+        for (const dict::Op& op : w.phases[1].ops) {
+            CHECK(op.key < 2 * n);
+            hits += present.contains(op.key);
+        }
+        CHECK(hits == n / 2);
+    }
+
+    // zipf: hot keys are the oldest, so looked-up keys sit near the start of the
+    // insertion order. zipf_shuffled: popularity is unrelated to it.
+    auto mean_insert_position = [&](std::string_view family) {
+        const dict::Workload w = dict::make_workload(family, n, 7);
+        std::map<Key, std::size_t> position;
+        for (std::size_t i = 0; i < n; ++i) position[w.phases[0].ops[i].key] = i;
+        double sum = 0;
+        for (const dict::Op& op : w.phases[1].ops) sum += static_cast<double>(position.at(op.key));
+        return sum / static_cast<double>(w.phases[1].ops.size() * n);
+    };
+    CHECK(mean_insert_position("zipf") < 0.2);
+    const double shuffled = mean_insert_position("zipf_shuffled");
+    CHECK(shuffled > 0.35 && shuffled < 0.65);
+
+    // steady: n/4 fresh keys, absent until inserted, replayed in the same order by every phase.
+    const dict::Workload s = dict::make_workload("steady", n, 7);
+    const std::vector<std::pair<std::string_view, dict::OpKind>> expected = {
+        {"insert", dict::OpKind::Insert}, {"find_miss", dict::OpKind::Find}, {"insert_new", dict::OpKind::Insert},
+        {"find_new", dict::OpKind::Find}, {"erase_new", dict::OpKind::Erase}};
+    CHECK(s.phases.size() == expected.size());
+    for (std::size_t p = 0; p < expected.size(); ++p) {
+        CHECK(s.phases[p].name == expected[p].first);
+        for (const dict::Op& op : s.phases[p].ops) CHECK(op.kind == expected[p].second);
+    }
+    std::set<Key> built;
+    for (const dict::Op& op : s.phases[0].ops) built.insert(op.key);
+    CHECK(s.phases[1].ops.size() == n / 4);
+    for (std::size_t i = 0; i < s.phases[1].ops.size(); ++i) {
+        CHECK(!built.contains(s.phases[1].ops[i].key));
+        for (std::size_t p = 2; p < s.phases.size(); ++p) CHECK(s.phases[p].ops[i].key == s.phases[1].ops[i].key);
+    }
+}
+
+// Probe keys give the same answers as std::map, and the distinct keys an
+// operation reads are consistent with the structure's own counters. The
+// red-black tree compares the key of every node it visits, so for its lookups
+// the two counts must be equal.
+template <class MP>
+void test_probe_keys() {
+    const dict::Workload w = dict::make_workload("uniform", 2'000, 31);
+    MP m = fresh<MP>();
+    std::map<Key, Value> oracle;
+    for (const dict::Phase& phase : w.phases) {
+        for (const dict::Op& op : phase.ops) {
+            const dict::ProbeKey k(op.key);
+            const dict::OpCounters before = m.counters();
+            dict::probe::begin(&k);
+            switch (op.kind) {
+                case dict::OpKind::Insert:
+                    CHECK(m.insert(k, op.key) == oracle.insert_or_assign(op.key, op.key).second);
+                    break;
+                case dict::OpKind::Find:
+                    CHECK((m.find(k) != nullptr) == oracle.contains(op.key));
+                    break;
+                case dict::OpKind::Erase:
+                    CHECK(m.erase(k) == (oracle.erase(op.key) == 1));
+                    break;
+            }
+            const dict::OpCounters d = m.counters() - before;
+            const std::size_t distinct = dict::probe::read.size();
+            CHECK(distinct <= d.comparisons);
+            if (op.kind == dict::OpKind::Find && !m.empty()) CHECK(distinct >= 1);
+            if (op.kind == dict::OpKind::Find && std::string_view(MP::name) == "red_black_tree")
+                CHECK(distinct == d.node_visits);
+        }
+        CHECK(m.size() == oracle.size());
+        CHECK(m.check_invariants());
+    }
+}
+
 // ---- Runner ----------------------------------------------------------------
 
 struct Totals {
@@ -311,6 +400,12 @@ void run_string_suite(Totals& t) {
     }
 }
 
+// Probe-key version of the same implementation, MP = M<dict::ProbeKey, Value>.
+template <dict::OrderedMap MP>
+void run_probe_suite(Totals& t) {
+    if constexpr (MP::implemented) run_one(t, MP::name, "probe_keys", test_probe_keys<MP>);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -320,19 +415,23 @@ int main(int argc, char** argv) {
     if (which == "infrastructure" || which == "all") {
         std::printf("[infrastructure]\n");
         run_one(t, "infrastructure", "rng_and_workloads", test_infrastructure);
+        run_one(t, "infrastructure", "workload_shapes", test_workload_shapes);
         run_one(t, "infrastructure", "key_encodings", test_key_encodings);
     }
     if (which == "std_map" || which == "all") {
         run_suite<dict::StdMapAdapter<Key, Value>>(t);
         run_string_suite<dict::StdMapAdapter<std::string, Value>>(t);
+        run_probe_suite<dict::StdMapAdapter<dict::ProbeKey, Value>>(t);
     }
     if (which == "red_black_tree" || which == "all") {
         run_suite<dict::RedBlackTree<Key, Value>>(t);
         run_string_suite<dict::RedBlackTree<std::string, Value>>(t);
+        run_probe_suite<dict::RedBlackTree<dict::ProbeKey, Value>>(t);
     }
     if (which == "skip_list" || which == "all") {
         run_suite<dict::SkipListAdapter<Key, Value>>(t);
         run_string_suite<dict::SkipListAdapter<std::string, Value>>(t);
+        run_probe_suite<dict::SkipListAdapter<dict::ProbeKey, Value>>(t);
     }
 
     std::printf("\n%d passed, %d failed, %d skipped\n", t.passed, t.failed, t.skipped);

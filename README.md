@@ -88,16 +88,23 @@ Workload families (`core/include/dict/workloads.hpp`):
 | Family | Phases |
 |---|---|
 | `uniform` | insert n random keys → n lookups (≈50% hits) → erase all in random order |
-| `sorted` | insert 0..n-1 ascending → n lookups → erase ascending |
-| `reverse` | insert descending → n lookups → erase descending |
+| `sorted` | insert 0, 2, …, 2n−2 ascending → n lookups (50% hits, misses in the gaps) → erase ascending |
+| `reverse` | as `sorted`, inserted and erased descending |
 | `sliding_window` | insert n random keys → n rounds of (insert new, erase oldest) |
-| `zipf` | insert n random keys → n Zipf(s≈1)-skewed lookups |
+| `zipf` | insert n random keys → n Zipf(s≈1)-skewed lookups; the oldest keys are the hottest |
+| `zipf_shuffled` | as `zipf`, but popularity is unrelated to insertion order |
+| `steady` | insert n random keys → with n/4 fresh keys: look them up (misses) → insert them → look them up (hits) → erase them |
+
+In `steady`, each write retraces the search path of the lookup before it, so `insert_new − find_miss` and `erase_new − find_new` give the cost of the write itself.
+
+The instrumented build also accepts `--key probe`. A probe key orders like an int key and records the distinct stored keys each operation compares against (the nodes it has to load). These are written as the `distinct_keys` histogram metric (`core/include/dict/probe_key.hpp`).
 
 Run the standard experiment set (Release build required):
 
 ```powershell
-.\scripts\run_experiments.ps1 -Quick   # small sizes, checks the pipeline (~seconds)
-.\scripts\run_experiments.ps1          # full run
+.\scripts\run_experiments.ps1 -Quick           # small sizes, checks the pipeline (~seconds)
+.\scripts\run_experiments.ps1                  # full run
+.\scripts\run_experiments.ps1 -Groups B,C1,D,E # only some groups (see the script header)
 ```
 
 This writes three files to `results/`:

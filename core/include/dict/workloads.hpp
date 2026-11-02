@@ -6,6 +6,7 @@
 // generated entirely up front (outside any timed region) from an input seed,
 // so every implementation replays exactly the same operations.
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -81,6 +82,16 @@ inline std::vector<Op> mixed_lookups(const std::vector<Key>& present, std::size_
     return ops;
 }
 
+// n lookups over the keys 0, 2, ..., 2n-2: half hits, half misses on the odd
+// numbers between them, so misses land in random gaps rather than all beyond
+// the largest key.
+inline std::vector<Op> gap_lookups(std::size_t n, Xoshiro256& rng) {
+    std::vector<Op> ops;
+    ops.reserve(n);
+    for (std::size_t i = 0; i < n; ++i) ops.push_back({OpKind::Find, 2 * rng.below(n) + (i % 2)});
+    return ops;
+}
+
 // Approximate Zipf(s = 1) rank in [0, n): inverts the continuous CDF
 // F(x) = ln(x) / ln(n + 1). Cheap and O(1) memory, good enough to create a
 // skewed access pattern (rank 0 is the hottest key).
@@ -94,17 +105,25 @@ inline std::size_t zipf_rank(std::size_t n, Xoshiro256& rng) {
 
 inline const std::vector<std::string_view>& workload_families() {
     static const std::vector<std::string_view> families = {
-        "uniform", "sorted", "reverse", "sliding_window", "zipf"};
+        "uniform", "sorted", "reverse", "sliding_window", "zipf", "zipf_shuffled", "steady"};
     return families;
 }
 
 // Build a workload of the given family over n keys.
 //
 //   uniform        insert n random keys in random order; n lookups (50% hits); erase all in random order
-//   sorted         insert keys in ascending order;       n lookups;            erase all in ascending order
-//   reverse        insert keys in descending order;      n lookups;            erase all in descending order
+//   sorted         insert 0, 2, ..., 2n-2 in ascending order;  n lookups (50% hits, misses in the gaps);
+//                  erase all in ascending order
+//   reverse        as sorted, but inserted and erased in descending order
 //   sliding_window insert n random keys; then n rounds of (insert a new key, erase the oldest key)
-//   zipf           insert n random keys; n Zipf-skewed lookups (all hits)
+//   zipf           insert n random keys; n Zipf-skewed lookups (all hits). The r-th key inserted has
+//                  popularity rank r, so the hottest keys are the oldest.
+//   zipf_shuffled  as zipf, but popularity ranks are an independent shuffle of the keys, unrelated to
+//                  insertion order
+//   steady         insert n random keys; then, with m = n/4 fresh keys: m lookups of the fresh keys
+//                  (all misses), insert them, m lookups of them again (all hits), erase them. Size stays
+//                  in [n, 1.25n] and each write retraces its matching lookup's search path, so
+//                  insert_new - find_miss and erase_new - find_new are the cost of the write itself.
 inline Workload make_workload(std::string_view family, std::size_t n, std::uint64_t input_seed) {
     if (n == 0) throw std::invalid_argument("workload size must be > 0");
 
@@ -119,9 +138,9 @@ inline Workload make_workload(std::string_view family, std::size_t n, std::uint6
         w.phases.push_back({"erase", detail::ops_of(OpKind::Erase, keys)});
     } else if (family == "sorted" || family == "reverse") {
         std::vector<Key> ordered(n);
-        for (std::size_t i = 0; i < n; ++i) ordered[i] = (family == "sorted") ? i : n - 1 - i;
+        for (std::size_t i = 0; i < n; ++i) ordered[i] = 2 * ((family == "sorted") ? i : n - 1 - i);
         w.phases.push_back({"insert", detail::ops_of(OpKind::Insert, ordered)});
-        w.phases.push_back({"find", detail::mixed_lookups(ordered, n, rng)});
+        w.phases.push_back({"find", detail::gap_lookups(n, rng)});
         w.phases.push_back({"erase", detail::ops_of(OpKind::Erase, ordered)});
     } else if (family == "sliding_window") {
         w.phases.push_back({"insert", detail::ops_of(OpKind::Insert, keys)});
@@ -134,12 +153,23 @@ inline Workload make_workload(std::string_view family, std::size_t n, std::uint6
             churn.push_back({OpKind::Erase, keys[i]});
         }
         w.phases.push_back({"churn", std::move(churn)});
-    } else if (family == "zipf") {
+    } else if (family == "zipf" || family == "zipf_shuffled") {
         w.phases.push_back({"insert", detail::ops_of(OpKind::Insert, keys)});
+        std::vector<Key> by_rank = keys;
+        if (family == "zipf_shuffled") detail::shuffle(by_rank, rng);
         std::vector<Op> lookups;
         lookups.reserve(n);
-        for (std::size_t i = 0; i < n; ++i) lookups.push_back({OpKind::Find, keys[detail::zipf_rank(n, rng)]});
+        for (std::size_t i = 0; i < n; ++i) lookups.push_back({OpKind::Find, by_rank[detail::zipf_rank(n, rng)]});
         w.phases.push_back({"find", std::move(lookups)});
+    } else if (family == "steady") {
+        const std::size_t m = std::max<std::size_t>(1, n / 4);
+        const std::vector<Key> all = detail::distinct_random_keys(n + m, input_seed);
+        const std::vector<Key> fresh(all.begin() + static_cast<std::ptrdiff_t>(n), all.end());
+        w.phases.push_back({"insert", detail::ops_of(OpKind::Insert, keys)});
+        w.phases.push_back({"find_miss", detail::ops_of(OpKind::Find, fresh)});
+        w.phases.push_back({"insert_new", detail::ops_of(OpKind::Insert, fresh)});
+        w.phases.push_back({"find_new", detail::ops_of(OpKind::Find, fresh)});
+        w.phases.push_back({"erase_new", detail::ops_of(OpKind::Erase, fresh)});
     } else {
         throw std::invalid_argument("unknown workload family: " + std::string(family));
     }

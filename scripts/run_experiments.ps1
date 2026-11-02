@@ -7,17 +7,19 @@
 #   .\scripts\run_experiments.ps1                 # full run (over an hour)
 #   .\scripts\run_experiments.ps1 -Quick          # small sizes, for checking the pipeline
 #   .\scripts\run_experiments.ps1 -BinDir <dir>   # bench binaries somewhere else (e.g. a GCC build)
+#   .\scripts\run_experiments.ps1 -Groups B,C1,D,E  # only these groups
 #
 # Groups (output files are prefixed by group, and plot_results.py reads them all):
 #   A1  timing + per-op latency, uniform, all key types, n = 1e3 .. 1e6
 #   A2  timing + per-op latency, uniform, all key types, n = 3e6, 1e7 (one seed pair)
-#   B   timing + per-op latency, sorted/reverse/sliding_window/zipf, int keys
+#   B   timing + per-op latency, sorted/reverse/sliding_window/zipf/zipf_shuffled/steady, int keys
 #   C1  counters, cost histograms and memory, all workloads, int keys
 #   C2  counters, cost histograms and memory, uniform, string keys
 #   C3  memory only, uniform, all key types, n = 3e6, 1e7
-#   D   seed variance (H4): uniform int n = 1e5, 5 input seeds x 20 algorithm seeds
+#   D   seed variance (H4): uniform int, n = 1e3 .. 3e5, 5 input seeds x 20 algorithm seeds
+#   E   distinct keys read per operation (probe keys): uniform/zipf/zipf_shuffled/steady
 
-param([switch]$Quick, [string]$BinDir)
+param([switch]$Quick, [string]$BinDir, [string[]]$Groups = @('A1', 'A2', 'B', 'C1', 'C2', 'C3', 'D', 'E'))
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
@@ -27,11 +29,11 @@ New-Item -ItemType Directory -Force $results | Out-Null
 
 if ($Quick) {
     $mid = '1000,10000'; $big = '30000'; $seedsIn = 2; $seedsAlgo = 2; $reps = 2
-    $varN = '10000'; $varIn = 2; $varAlgo = 3
+    $varN = '1000,10000'; $varIn = 2; $varAlgo = 3
 } else {
     $mid = '1000,3000,10000,30000,100000,300000,1000000'; $big = '3000000,10000000'
     $seedsIn = 3; $seedsAlgo = 2; $reps = 3
-    $varN = '100000'; $varIn = 5; $varAlgo = 20
+    $varN = '1000,10000,100000,300000'; $varIn = 5; $varAlgo = 20
 }
 
 # Runs a benchmark binary at High priority pinned to core 2 (affinity mask 0x4)
@@ -62,26 +64,48 @@ function Invoke-Counts([string]$group, [string[]]$benchArgs) {
 
 $started = Get-Date
 
-Invoke-Timing 'A1' @('--key', 'all', '--workload', 'uniform', '--n', $mid,
-    '--input-seeds', $seedsIn, '--algo-seeds', $seedsAlgo, '--reps', $reps, '--warmup', 1)
-Invoke-Timing 'A2' @('--key', 'all', '--workload', 'uniform', '--n', $big,
-    '--input-seeds', 1, '--algo-seeds', 1, '--reps', 2, '--warmup', 0)
-Invoke-Timing 'B' @('--key', 'int', '--workload', 'sorted,reverse,sliding_window,zipf', '--n', $mid,
-    '--input-seeds', 2, '--algo-seeds', 2, '--reps', $reps, '--warmup', 1)
+if ($Groups -contains 'A1') {
+    Invoke-Timing 'A1' @('--key', 'all', '--workload', 'uniform', '--n', $mid,
+        '--input-seeds', $seedsIn, '--algo-seeds', $seedsAlgo, '--reps', $reps, '--warmup', 1)
+}
+if ($Groups -contains 'A2') {
+    Invoke-Timing 'A2' @('--key', 'all', '--workload', 'uniform', '--n', $big,
+        '--input-seeds', 1, '--algo-seeds', 1, '--reps', 2, '--warmup', 0)
+}
+if ($Groups -contains 'B') {
+    Invoke-Timing 'B' @('--key', 'int', '--workload', 'sorted,reverse,sliding_window,zipf,zipf_shuffled,steady',
+        '--n', $mid, '--input-seeds', 2, '--algo-seeds', 2, '--reps', $reps, '--warmup', 1)
+}
 
-Invoke-Counts 'C1' @('--key', 'int', '--workload', 'all', '--n', $mid,
-    '--input-seeds', 2, '--algo-seeds', 2, '--reps', 1)
-Invoke-Counts 'C2' @('--key', 'small_string,large_string', '--workload', 'uniform', '--n', $mid,
-    '--input-seeds', 2, '--algo-seeds', 2, '--reps', 1)
-# --reps 0: skip the counted runs and only take the memory snapshot.
-Invoke-Counts 'C3' @('--key', 'all', '--workload', 'uniform', '--n', $big,
-    '--input-seeds', 1, '--algo-seeds', 1, '--reps', 0)
+if ($Groups -contains 'C1') {
+    Invoke-Counts 'C1' @('--key', 'int', '--workload', 'all', '--n', $mid,
+        '--input-seeds', 2, '--algo-seeds', 2, '--reps', 1)
+}
+if ($Groups -contains 'C2') {
+    Invoke-Counts 'C2' @('--key', 'small_string,large_string', '--workload', 'uniform', '--n', $mid,
+        '--input-seeds', 2, '--algo-seeds', 2, '--reps', 1)
+}
+if ($Groups -contains 'C3') {
+    # --reps 0: skip the counted runs and only take the memory snapshot.
+    Invoke-Counts 'C3' @('--key', 'all', '--workload', 'uniform', '--n', $big,
+        '--input-seeds', 1, '--algo-seeds', 1, '--reps', 0)
+}
 
-Write-Host '== D (seed variance) =='
-Invoke-Bench 'dict_bench.exe' @('--key', 'int', '--workload', 'uniform', '--n', $varN,
-    '--input-seeds', $varIn, '--algo-seeds', $varAlgo, '--reps', 1, '--warmup', 1, '--out', (Result-Path 'seeds_timing.csv'))
-Invoke-Bench 'dict_bench_instrumented.exe' @('--key', 'int', '--workload', 'uniform', '--n', $varN,
-    '--input-seeds', $varIn, '--algo-seeds', $varAlgo, '--reps', 1, '--warmup', 0,
-    '--out', (Result-Path 'seeds_counts.csv'), '--hist-out', (Result-Path 'seeds_histograms.csv'))
+if ($Groups -contains 'D') {
+    Write-Host '== D (seed variance) =='
+    Invoke-Bench 'dict_bench.exe' @('--key', 'int', '--workload', 'uniform', '--n', $varN,
+        '--input-seeds', $varIn, '--algo-seeds', $varAlgo, '--reps', 1, '--warmup', 1, '--out', (Result-Path 'seeds_timing.csv'))
+    Invoke-Bench 'dict_bench_instrumented.exe' @('--key', 'int', '--workload', 'uniform', '--n', $varN,
+        '--input-seeds', $varIn, '--algo-seeds', $varAlgo, '--reps', 1, '--warmup', 0,
+        '--out', (Result-Path 'seeds_counts.csv'), '--hist-out', (Result-Path 'seeds_histograms.csv'))
+}
+
+if ($Groups -contains 'E') {
+    # Probe keys order like int keys, so the structures have the same shapes as in C1.
+    Write-Host '== E (distinct keys read, probe keys) =='
+    Invoke-Bench 'dict_bench_instrumented.exe' @('--key', 'probe', '--workload', 'uniform,zipf,zipf_shuffled,steady',
+        '--n', $mid, '--input-seeds', 2, '--algo-seeds', 2, '--reps', 1, '--warmup', 0,
+        '--out', (Result-Path 'counts_E.csv'), '--hist-out', (Result-Path 'histograms_E.csv'))
+}
 
 Write-Host ("Results written to $results in {0:N1} min" -f ((Get-Date) - $started).TotalMinutes)
