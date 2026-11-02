@@ -64,7 +64,7 @@ public:
 
     bool insert(const T& element) {
         array<Node*, max_levels> predecessors = {};
-        Node* node = search(element, predecessors)->next()[0];
+        Node* node = search(element, &predecessors)->next()[0];
         if (node) {
             DICT_COUNT(counters_, comparisons, 1);
         }
@@ -95,7 +95,7 @@ public:
     // Returns true if element was present.
     bool erase(const T& element) {
         array<Node*, max_levels> predecessors = {};
-        Node* node = search(element, predecessors)->next()[0];
+        Node* node = search(element, &predecessors)->next()[0];
         if (node) {
             DICT_COUNT(counters_, comparisons, 1);
         }
@@ -119,8 +119,7 @@ public:
     }
 
     bool exists(const T& element) const {
-        array<Node*, max_levels> predecessors = {};
-        Node* node = search(element, predecessors)->next()[0];
+        Node* node = search(element, nullptr)->next()[0];
         if (node) {
             DICT_COUNT(counters_, comparisons, 1);
         }
@@ -220,10 +219,8 @@ private:
     dict::Xoshiro256 rng_{};
     mutable dict::OpCounters counters_{};
 
-    // Fills the caller's predecessors (the last node before element at each
-    // level) and returns the level-0 predecessor. Writing into the caller's
-    // array avoids copying it back on every call.
-    Node* search(const T& element, array<Node*, max_levels>& predecessors) const {
+    // Pass nullptr for predecessors when they aren't needed (lookups).
+    Node* search(const T& element, array<Node*, max_levels>* predecessors) const {
         int8_t level = levels - 1;
         Node* current = head;
         while (level >= 0) {
@@ -234,7 +231,10 @@ private:
             }
 
             if (!next || next->data >= element) {
-                predecessors[level] = current;
+                if (predecessors) {
+                    (*predecessors)[level] = current;
+                }
+
                 --level;
             }
 
