@@ -40,3 +40,31 @@ Reading the explanation as describing `search`'s return value made it look incor
 **How it was resolved:** The AI noticed the contradiction itself when asked how to test the inconclusive results, before any test was run. Section 3 was rewritten to name allocation and freeing (variable-size skip list nodes vs fixed-size tree nodes) as the remaining suspect, marked as untested, and a test was written for it (allocation counts per operation and `dict_alloc_bench`).
 
 **Lesson:** Check a performance explanation against the algorithm's own invariants before writing it down. "Not on the search path" was ruled out by the definition of a predecessor.
+
+## 2026-11-03: Simulation regression crashed on mismatched columns
+
+**Person:** Laith
+
+**Tool:** Claude Code (Claude Opus 5.5)
+
+**Context:** `scripts/simulate_skiplist.py`, written by the AI, regresses each seed's search cost on the node counts at the top levels of the skip list, to see how much of the spread across seeds they explain.
+
+**What the AI did:** Named the count columns by absolute level (level 9, level 10, ...). The top levels differ with n, so each n got a different set of columns. After the results were combined, the missing columns were NaN, and the least-squares fit failed with `LinAlgError: SVD did not converge`.
+
+**What was wrong:** The columns had to mean the same thing at every n. Columns named by absolute level don't, because a skip list over 10³ keys has fewer levels than one over 3·10⁵.
+
+**How it was resolved:** The script crashed on its first run, before any numbers were reported. The AI renamed the columns by offset from log₂n (`count_log2n_minus_k`) and re-ran it.
+
+**Lesson:** When results from different n are combined into one table, check that every column means the same thing at every n.
+
+## 2026-11-03: Wrong date on the follow-up results
+
+**Person:** Laith
+
+**Tool:** Claude Code (Claude Opus 5.5)
+
+**What the AI did:** Wrote "Run on 2026-11-04" in `tests/theory_results.md` and its memory notes. The tests ran on 2026-11-03.
+
+**How it was resolved:** The AI noticed when the result file timestamps showed 3 November, and corrected the date before pushing.
+
+**Lesson:** Take dates from the system or file timestamps, not from the AI's assumption.

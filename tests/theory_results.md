@@ -169,7 +169,7 @@ Two tests need changes to the skip list, so they are left to Laith: a read-only 
 
 ## Follow-up results
 
-Run on 2026-11-04: groups C1, D2, E and G (17.5 minutes), plus `scripts/simulate_skiplist.py`. All 34 unit tests passed first.
+Run on 2026-11-03: groups C1, D2, E and G (17.5 minutes), plus `scripts/simulate_skiplist.py`. All 34 unit tests passed first.
 
 ### Section 6: the seed spread does shrink (`seeds_spread_ci.png`, `sim_seeds.png`)
 
