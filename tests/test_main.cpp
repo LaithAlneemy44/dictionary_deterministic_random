@@ -334,6 +334,17 @@ void test_probe_touch() {
     dict::probe::begin(buf);
     dict::probe::note(buf, 8);  // the operation's own key is never counted
     CHECK(dict::probe::read.empty() && dict::probe::lines.empty());
+
+    // Key objects and buffers are split by page; same_page counts each key once.
+    dict::probe::begin(nullptr);
+    dict::probe::note(buf, 8, buf + 100, 4);       // buffer on the key's page
+    dict::probe::note(buf, 8, buf + 100, 4);       // same key again
+    dict::probe::note(buf + 64, 8, buf + 8192, 4);  // buffer two pages away
+    CHECK(dict::probe::read.size() == 2);
+    CHECK(dict::probe::same_page == 1);
+    CHECK(dict::probe::key_pages.size() == 1);
+    CHECK(dict::probe::data_pages.size() == 2);
+    CHECK(dict::probe::pages.size() == 2);
 }
 
 template <class PK>
@@ -377,6 +388,10 @@ void test_probe_keys() {
             const std::size_t lines = dict::probe::lines.size();
             CHECK(dict::probe::pages.size() <= lines);
             CHECK((distinct == 0) == (lines == 0));
+            CHECK(dict::probe::key_pages.size() <= dict::probe::pages.size());
+            CHECK(dict::probe::data_pages.size() <= dict::probe::pages.size());
+            CHECK(dict::probe::pages.size() <= dict::probe::key_pages.size() + dict::probe::data_pages.size());
+            CHECK(dict::probe::same_page <= distinct);
             // An aligned 8-byte key never straddles a line.
             if constexpr (std::is_same_v<PK, dict::ProbeKey>) CHECK(lines <= distinct);
         }

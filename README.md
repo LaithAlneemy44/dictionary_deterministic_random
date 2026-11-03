@@ -99,7 +99,9 @@ In `steady`, each write retraces the search path of the lookup before it, so `in
 
 The instrumented build also accepts `--key probe` and `--key probe_large_string`. A probe key orders like an int (or large string) key and records the distinct stored keys each operation compares against (the nodes it has to load), plus the cache lines and 4 KiB pages holding the key bytes read. These are written as the `distinct_keys`, `cache_lines` and `pages` histogram metrics (`core/include/dict/probe_key.hpp`).
 
-The instrumented build also counts heap allocations per operation (`heap_allocs`, `heap_frees`) and their sizes (`alloc_size`). `dict_alloc_bench` times allocation and freeing alone, with block sizes modelled on each structure's nodes.
+Probe keys also split those pages into `node_pages` (key objects inside nodes) and `buffer_pages` (string buffers). `same_page_keys` counts the keys read whose buffer is on the same page as their node.
+
+The instrumented build also counts heap allocations per operation (`heap_allocs`, `heap_frees`), their sizes (`alloc_size`), and the distance in pages from each allocation to the previous one (`alloc_page_gap`). `dict_alloc_bench` times allocation and freeing alone, with block sizes modelled on each structure's nodes. Its `--evict R` option adds R cache-missing reads before each operation, standing in for a write's search.
 
 `scripts/simulate_skiplist.py` simulates the skip list model (not the C++ code) to check the distinct-node formula and where the spread across seeds comes from.
 
@@ -110,6 +112,7 @@ Run the standard experiment set (Release build required):
 .\scripts\run_experiments.ps1                  # full run
 .\scripts\run_experiments.ps1 -Groups B,C1,D,E # only some groups (see the script header)
 .\scripts\run_experiments.ps1 -Groups C1,D2,E,G # follow-up tests (D2 and G are not in the default set)
+.\scripts\run_experiments.ps1 -Groups H,G2     # heap layout and allocator after cache eviction (not in the default set)
 ```
 
 This writes three files to `results/`:

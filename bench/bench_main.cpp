@@ -26,11 +26,15 @@
 // probe_large_string, one that orders like large_string. Both record the
 // distinct stored keys each operation reads and the cache lines and pages
 // those reads touch (dict/probe_key.hpp), written as the distinct_keys,
-// cache_lines and pages histograms.
+// cache_lines and pages histograms. The pages are also split into node_pages
+// (key objects, inside the nodes) and buffer_pages (separate string buffers),
+// and same_page_keys counts the keys read whose buffer is on their node's page.
 //
 // The instrumented build also replaces global operator new and delete to count
 // the heap allocations each operation makes (heap_allocs, heap_frees) and their
-// sizes (alloc_size: value = bytes requested, count = allocations). Allocations
+// sizes (alloc_size: value = bytes requested, count = allocations), and the
+// distance in 4 KiB pages from each allocation to the one before it
+// (alloc_page_gap, capped at kMaxGap). Allocations
 // made inside the libstdc++ DLL (e.g. some std::string copies) bypass the
 // replacement, so these counts are only complete for int and probe keys.
 
@@ -89,16 +93,27 @@ inline bool active = false;
 inline std::uint64_t allocs = 0;
 inline std::uint64_t frees = 0;
 inline std::array<std::uint64_t, kMaxSize + 1> sizes{};
+inline constexpr std::size_t kMaxGap = 1024;
+inline std::uintptr_t last_page = 0;  // page of the previous counted allocation, 0 = none yet
+inline std::array<std::uint64_t, kMaxGap + 1> page_gaps{};
 }  // namespace alloc_track
 
 #ifdef DICT_INSTRUMENT
 void* operator new(std::size_t n) {
+    void* p = std::malloc(n ? n : 1);
+    if (!p) throw std::bad_alloc();
     if (alloc_track::active) {
         ++alloc_track::allocs;
         ++alloc_track::sizes[std::min(n, alloc_track::kMaxSize)];
+        const std::uintptr_t page = reinterpret_cast<std::uintptr_t>(p) / 4096;
+        if (alloc_track::last_page) {
+            const std::uintptr_t gap = page > alloc_track::last_page ? page - alloc_track::last_page
+                                                                     : alloc_track::last_page - page;
+            ++alloc_track::page_gaps[std::min<std::uintptr_t>(gap, alloc_track::kMaxGap)];
+        }
+        alloc_track::last_page = page;
     }
-    if (void* p = std::malloc(n ? n : 1)) return p;
-    throw std::bad_alloc();
+    return p;
 }
 
 void operator delete(void* p) noexcept {
@@ -365,7 +380,7 @@ using Histogram = std::map<std::uint64_t, std::uint64_t>;
 
 struct PhaseHistograms {
     Histogram comparisons, node_visits, structural, heap_allocs, heap_frees;
-    Histogram distinct_keys, cache_lines, pages;  // probe keys only
+    Histogram distinct_keys, cache_lines, pages, node_pages, buffer_pages, same_page_keys;  // probe keys only
 };
 
 template <class K>
@@ -409,6 +424,8 @@ void run_impl(Context& ctx, const RunInfo& r, const std::vector<TypedPhase<typen
             if constexpr (kInstrumented) {
                 constexpr bool kProbe = kIsProbe<typename M::key_type>;
                 alloc_track::sizes.fill(0);
+                alloc_track::page_gaps.fill(0);
+                alloc_track::last_page = 0;
                 for (const auto& op : phase.ops) {
                     const dict::OpCounters before = m.counters();
                     const std::uint64_t allocs_before = alloc_track::allocs, frees_before = alloc_track::frees;
@@ -426,6 +443,11 @@ void run_impl(Context& ctx, const RunInfo& r, const std::vector<TypedPhase<typen
                         ++h.distinct_keys[dict::probe::read.size()];
                         ++h.cache_lines[dict::probe::lines.size()];
                         ++h.pages[dict::probe::pages.size()];
+                        ++h.node_pages[dict::probe::key_pages.size()];
+                        if constexpr (std::is_same_v<typename M::key_type, dict::ProbeString>) {
+                            ++h.buffer_pages[dict::probe::data_pages.size()];
+                            ++h.same_page_keys[dict::probe::same_page];
+                        }
                     }
                 }
             } else {
@@ -460,12 +482,19 @@ void run_impl(Context& ctx, const RunInfo& r, const std::vector<TypedPhase<typen
                 dump("distinct_keys", h.distinct_keys);
                 dump("cache_lines", h.cache_lines);
                 dump("pages", h.pages);
+                dump("node_pages", h.node_pages);
+                dump("buffer_pages", h.buffer_pages);
+                dump("same_page_keys", h.same_page_keys);
                 if constexpr (kInstrumented) {
                     // Per allocation, not per operation: value = bytes requested.
                     Histogram sizes;
                     for (std::size_t b = 0; b < alloc_track::sizes.size(); ++b)
                         if (alloc_track::sizes[b]) sizes[b] = alloc_track::sizes[b];
                     dump("alloc_size", sizes);
+                    Histogram gaps;
+                    for (std::size_t g = 0; g < alloc_track::page_gaps.size(); ++g)
+                        if (alloc_track::page_gaps[g]) gaps[g] = alloc_track::page_gaps[g];
+                    dump("alloc_page_gap", gaps);
                 }
             }
         }

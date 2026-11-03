@@ -257,3 +257,60 @@ At 10⁶, the tree reads 1.2 pages per key it compares against, and the skip lis
 - **Section 2:** the formula overestimates by about 6%, and the implementation is consistent with the model.
 - **Section 2 (large strings) and section 4:** page counts explain both the sorted-build speed-up and the large-string gap. The heap layout of variable-size nodes looks like the common cause, which is untested.
 - **Section 3:** allocation is ruled out as a cost in isolation. The write gap at large n is still unexplained.
+
+## Second follow-up: heap layout and allocator misses
+
+Run on 2026-11-03: groups H (heap layout, 1.8 minutes) and G2 (allocator after cache-evicting reads, 0.7 minutes). All 34 unit tests passed first. These test the two guesses left open above.
+
+### Heap layout explains the page results (`layout.png`, `summary/layout_page_gap.csv`, `summary/layout_strings.csv`)
+
+**Measured.**
+- **Where consecutive allocations land.** This is the share of allocations, while inserting int keys, that are within one page of the allocation before. It is the same for every build order and every n from 10⁴:
+  - tree: 99.8%
+  - skip list: 40%
+- **Large strings, lookups at 10⁶, uniform build.** This is the share of keys read whose string buffer is on the same page as the key in its node:
+  - tree: 64%
+  - skip list: 6%
+
+  Splitting the pages each lookup touches shows why the skip list touches so many:
+
+| | Node pages | Buffer pages | All pages |
+|---|---|---|---|
+| Tree | 17.9 | 17.8 | 23.6 |
+| Skip list | 26.7 | 29.1 | 53.0 |
+
+The tree's node and buffer pages are mostly the same pages. The skip list's barely overlap.
+
+**Verdict: supported.**
+- The tree's nodes are all one size, so the heap places them one after another. The skip list's nodes come in many sizes, and a node is only near the one allocated before it 40% of the time. That is close to the 1-in-3 chance that two random towers have the same height.
+- This is consistent with the heap keeping blocks of each size in a separate area. The placement is measured; that the Windows heap groups blocks by size is an inference from it, not something read from the heap itself.
+- It explains the large-string gap: a skip list key and its buffer are almost always on different pages, so each key read costs about two pages instead of one.
+- It probably explains why sorted builds help the skip list more (section 4). After a sorted build, nodes of the same height sit in key order within their area, so neighbouring keys share pages. After a uniform build, nothing does. Skip list node pages per lookup at 10⁶: 26.7 uniform, 14.6 sorted. The link from layout to speed is an inference.
+
+### Allocator misses do not explain the write cost (`alloc_evict.png`, `summary/alloc_evict.csv`)
+
+**Measured.** `dict_alloc_bench --evict R` does R dependent reads through a 64 MiB buffer before each allocation and each free, standing in for a write's search. It then subtracts the time of the reads alone. Median ns per operation at 10⁶:
+
+| Reads before each operation | Allocate, 48-byte | Allocate, tower-sized | Free, 48-byte | Free, tower-sized |
+|---|---|---|---|---|
+| 0 (group G) | 43 | 42 | 28 | 35 |
+| 4 | 43 | 45 | 9 | 10 |
+| 16 | 53 | 32 | 33 | 26 |
+
+**Verdict: refuted.**
+- With the cache evicted, allocation costs 30–90 ns for both node shapes across all n, with no consistent difference between them. The run-to-run noise is about ±20 ns.
+- The skip list's write gap at 10⁶ (93 ns for inserts, 97 ns for erases) is far larger than any difference here.
+- **Caveats:**
+  - Subtracting the reads is approximate, because the CPU can overlap some allocator work with them.
+  - The reads go to a separate buffer, not through a real structure.
+
+### What is left
+
+The skip list's write cost at n ≥ 3·10⁵ is still unexplained. These causes are ruled out:
+- extra search
+- allocation in isolation
+- allocation after cache eviction
+
+I don't have a candidate I can defend. The pointers a write changes belong to the predecessors the search just read, and the benchmark already includes writing the new node. Two tests would settle it:
+- **Hardware counters.** Count cache and TLB misses per operation with a profiler such as Intel VTune or AMD uProf, whichever matches the CPU.
+- **Same pool allocator for both structures.** This means changing both implementations, so it needs Aaron's agreement.

@@ -14,6 +14,12 @@
 //   probe::lines  the distinct 64-byte cache lines holding the bytes of those
 //                 keys that the comparisons read
 //   probe::pages  the distinct 4 KiB pages holding those bytes
+//   probe::key_pages   the pages holding the key objects themselves (inside
+//                      the nodes)
+//   probe::data_pages  the pages holding separately allocated key buffers
+//                      (ProbeString only), so pages = key_pages ∪ data_pages
+//   probe::same_page   how many of the read keys have their buffer starting on
+//                      the same page as the key object
 //
 // This differs from the node_visits counter: a skip list search often compares
 // against the same node again after dropping a level, which counts as a visit
@@ -43,28 +49,40 @@ inline const void* search_key = nullptr;
 inline std::vector<const void*> read;
 inline std::vector<std::uintptr_t> lines;
 inline std::vector<std::uintptr_t> pages;
+inline std::vector<std::uintptr_t> key_pages;
+inline std::vector<std::uintptr_t> data_pages;
+inline std::size_t same_page = 0;
 
 template <class T>
 inline void add_unique(std::vector<T>& v, T x) {
     if (std::find(v.begin(), v.end(), x) == v.end()) v.push_back(x);
 }
 
-// Records the lines and pages spanned by `len` bytes at `p`.
-inline void touch(const void* p, std::size_t len) {
+inline std::uintptr_t page_of(const void* p) { return reinterpret_cast<std::uintptr_t>(p) / kPageBytes; }
+
+// Records the lines and pages spanned by `len` bytes at `p`. The pages are also
+// added to `own_pages` when given.
+inline void touch(const void* p, std::size_t len, std::vector<std::uintptr_t>* own_pages = nullptr) {
     if (len == 0) return;
     const auto first = reinterpret_cast<std::uintptr_t>(p);
     const std::uintptr_t last = first + len - 1;
     for (std::uintptr_t l = first / kLineBytes; l <= last / kLineBytes; ++l) add_unique(lines, l);
-    for (std::uintptr_t g = first / kPageBytes; g <= last / kPageBytes; ++g) add_unique(pages, g);
+    for (std::uintptr_t g = first / kPageBytes; g <= last / kPageBytes; ++g) {
+        add_unique(pages, g);
+        if (own_pages) add_unique(*own_pages, g);
+    }
 }
 
 // Notes a comparison operand: the key object at `key` (`key_len` bytes read)
 // and, for keys that own a separate buffer, `data_len` bytes read at `data`.
 inline void note(const void* key, std::size_t key_len, const void* data = nullptr, std::size_t data_len = 0) {
     if (key == search_key) return;
-    add_unique(read, key);
-    touch(key, key_len);
-    touch(data, data_len);
+    if (std::find(read.begin(), read.end(), key) == read.end()) {
+        read.push_back(key);
+        if (data && page_of(key) == page_of(data)) ++same_page;
+    }
+    touch(key, key_len, &key_pages);
+    touch(data, data_len, &data_pages);
 }
 
 // Starts recording an operation whose own key is at `key`.
@@ -73,6 +91,9 @@ inline void begin(const void* key) {
     read.clear();
     lines.clear();
     pages.clear();
+    key_pages.clear();
+    data_pages.clear();
+    same_page = 0;
 }
 
 }  // namespace probe

@@ -30,11 +30,13 @@ Plots (results/plots/):
   seeds_spread_ci.png               spread across 200 algorithm seeds with bootstrap intervals (group D2)
   locality.png                      cache lines and pages of key bytes per lookup, by build order (group E)
   alloc_vs_write.png                allocator alone (group G) vs write cost beyond its search
+  alloc_evict.png                   allocator cost with cache-evicting reads between operations (group G2)
+  layout.png                        heap layout: page gaps between allocations, node and buffer on one page (H)
 
 Summary tables (results/summary/): timing, latency, memory, count percentiles, seed variance, write cost,
-seed spread intervals, locality, allocator cost.
+seed spread intervals, locality, allocator cost, heap layout.
 
-Also read: seeds200_*.csv (group D2) and alloc_*.csv (dict_alloc_bench, group G).
+Also read: seeds200_*.csv (group D2), alloc_*.csv (dict_alloc_bench, groups G and G2) and layout_*.csv (group H).
 """
 
 import sys
@@ -629,19 +631,126 @@ def plot_locality(cp: pd.DataFrame) -> None:
     finish(fig, PLOTS / "locality.png")
 
 
+def plot_layout(hist: pd.DataFrame) -> None:
+    """Where the heap puts each structure's blocks (group H).
+
+    Left: share of allocations during the insert phase placed within one page of the
+    previous allocation. In a sorted build, consecutive allocations are neighbouring keys.
+    Right: share of the keys a lookup reads whose string buffer is on the same page as
+    the key object in its node (large-string probe keys).
+    """
+    g = hist[(hist["metric"] == "alloc_page_gap") & (hist["key"] == "int") & (hist["phase"] == "insert")
+             & hist["workload"].isin(["uniform", "sorted", "reverse"])]
+    # Only runs that recorded same_page_keys, so every metric's mean covers the same runs.
+    run = ["impl", "workload", "n", "input_seed", "algo_seed"]
+    s = hist[(hist["key"] == "probe_large_string") & (hist["phase"] == "find")]
+    s = s.merge(s.loc[s["metric"] == "same_page_keys", run].drop_duplicates(), on=run)
+    s = s[s["metric"].isin(["distinct_keys", "same_page_keys", "pages", "node_pages", "buffer_pages"])]
+    if not s.empty:
+        s = (s.assign(total=s["value"] * s["count"]).groupby(["workload", "impl", "n", "metric"])[["total", "count"]]
+             .sum())
+        s = (s["total"] / s["count"]).rename("mean").reset_index()
+    if g.empty and s.empty:
+        return
+    styles = {"uniform": "-", "sorted": "--", "reverse": ":"}
+    fig, axes = plt.subplots(1, 2, figsize=(10.0, 3.8), squeeze=False)
+    ax = axes[0][0]
+    if not g.empty:
+        keys = ["impl", "workload", "n"]
+        near = g.assign(near=g["count"].where(g["value"] <= 1, 0)).groupby(keys)[["near", "count"]].sum()
+        near = (near["near"] / near["count"]).rename("share_within_1_page").reset_index()
+        near.to_csv(SUMMARY / "layout_page_gap.csv", index=False)
+        for impl in ordered(near["impl"], IMPLS):
+            for family, ls in styles.items():
+                gi = near[(near["impl"] == impl) & (near["workload"] == family)].sort_values("n")
+                if not gi.empty:
+                    ax.plot(gi["n"], gi["share_within_1_page"], color=COLOURS.get(impl), linestyle=ls,
+                            marker="o", markersize=3, label=f"{impl}, {family}")
+        ax.legend(fontsize=7)
+    ax.set_title("within 1 page of previous allocation (int, insert)")
+    ax.set_ylabel("share of allocations")
+    ax = axes[0][1]
+    if not s.empty:
+        p = s.pivot_table(index=["workload", "impl", "n"], columns="metric", values="mean").reset_index()
+        if "same_page_keys" in p.columns:
+            p["same_page_share"] = p["same_page_keys"] / p["distinct_keys"]
+        p.to_csv(SUMMARY / "layout_strings.csv", index=False)
+        if "same_page_share" in p.columns:
+            for impl in ordered(p["impl"], IMPLS):
+                for family, ls in styles.items():
+                    gi = p[(p["impl"] == impl) & (p["workload"] == family)].sort_values("n")
+                    if not gi.empty:
+                        ax.plot(gi["n"], gi["same_page_share"], color=COLOURS.get(impl), linestyle=ls,
+                                marker="o", markersize=3, label=f"{impl}, {family}")
+    ax.set_title("buffer on its node's page (large strings, find)")
+    ax.set_ylabel("share of keys read")
+    for ax in axes[0]:
+        ax.set_xscale("log")
+        ax.set_xlabel("n (keys)")
+        ax.set_ylim(0, 1.02)
+        ax.grid(alpha=0.3)
+    fig.suptitle("Heap layout: are neighbouring blocks near each other?")
+    finish(fig, PLOTS / "layout.png")
+
+
+def steady_write_extra(timing: pd.DataFrame | None) -> pd.DataFrame | None:
+    """Median cost of a steady-workload write beyond its search, per impl and n."""
+    if timing is None:
+        return None
+    s = timing[(timing["workload"] == "steady") & (timing["key"] == "int")]
+    med = s.groupby(["impl", "phase", "n"])["ns_per_op"].median().unstack("phase")
+    if not {"find_miss", "insert_new", "find_new", "erase_new"} <= set(med.columns):
+        return None
+    med["insert_extra"] = med["insert_new"] - med["find_miss"]
+    med["erase_extra"] = med["erase_new"] - med["find_new"]
+    return med
+
+
+def plot_alloc_evict(alloc: pd.DataFrame, timing: pd.DataFrame | None) -> None:
+    """Allocator cost with cache-evicting reads before each operation (group G2).
+
+    The reads stand in for a write's search. alloc - reads and free - reads approximate
+    what allocating and freeing cost once the search has evicted the allocator's data.
+    """
+    e = alloc[alloc["evict"] > 0]
+    if e.empty:
+        return
+    a = e.groupby(["evict", "model", "phase", "n"])["ns_per_op"].median().unstack("phase")
+    a["alloc_net"] = a["alloc"] - a["reads"]
+    a["free_net"] = a["free"] - a["reads"]
+    a = a.reset_index()
+    a.to_csv(SUMMARY / "alloc_evict.csv", index=False)
+    med = steady_write_extra(timing)
+    panels = [("alloc_net", "insert_extra", "allocation (net of reads) vs insert beyond search"),
+              ("free_net", "erase_extra", "free (net of reads) vs erase beyond search")]
+    fig, axes = plt.subplots(1, len(panels), figsize=(5.0 * len(panels), 3.8), squeeze=False)
+    for j, (col, extra, title) in enumerate(panels):
+        ax = axes[0][j]
+        for k, ((evict, model), g) in enumerate(a.groupby(["evict", "model"])):
+            g = g.sort_values("n")
+            ax.plot(g["n"], g[col], color="black", linestyle=["-", "--", ":", "-."][k % 4], marker="s",
+                    markersize=3, label=f"{model}, {int(evict)} reads")
+        if med is not None:
+            for impl in ["red_black_tree", "skip_list"]:
+                if impl in med.index.get_level_values("impl"):
+                    r = med.xs(impl, level="impl")[extra]
+                    impl_line(ax, impl, r.index, r.values)
+        ax.set_xscale("log")
+        ax.set_xlabel("n (live blocks / keys)")
+        ax.set_ylabel("ns / op")
+        ax.set_title(title)
+        ax.grid(alpha=0.3)
+        ax.legend(fontsize=7)
+    fig.suptitle("Allocator after cache-evicting reads (black) vs write cost (colour)")
+    finish(fig, PLOTS / "alloc_evict.png")
+
+
 def plot_alloc(alloc: pd.DataFrame, timing: pd.DataFrame | None) -> None:
     """Allocator cost alone (dict_alloc_bench) next to the measured cost of a write beyond its search."""
+    alloc = alloc[alloc["evict"] == 0]
     a = alloc.groupby(["model", "phase", "n"])["ns_per_op"].median().reset_index()
     a.to_csv(SUMMARY / "alloc.csv", index=False)
-    med = None
-    if timing is not None:
-        s = timing[(timing["workload"] == "steady") & (timing["key"] == "int")]
-        med = s.groupby(["impl", "phase", "n"])["ns_per_op"].median().unstack("phase")
-        if {"find_miss", "insert_new", "find_new", "erase_new"} <= set(med.columns):
-            med["insert_extra"] = med["insert_new"] - med["find_miss"]
-            med["erase_extra"] = med["erase_new"] - med["find_new"]
-        else:
-            med = None
+    med = steady_write_extra(timing)
     panels = [("alloc", "insert_extra", "allocation vs insert beyond its search"),
               ("free", "erase_extra", "free vs erase beyond its search")]
     fig, axes = plt.subplots(1, len(panels), figsize=(5.0 * len(panels), 3.8), squeeze=False)
@@ -695,6 +804,10 @@ def main() -> None:
         plot_path_length(cp)
         plot_tail_ratio(cp)
         plot_locality(cp)
+    # Group H writes layout_* files so its runs are not pooled with the other groups'.
+    layout = load("layout_hist_*.csv")
+    if layout is not None:
+        plot_layout(layout)
     counts = load("counts_*.csv")
     if counts is not None:
         plot_restructuring(counts)
@@ -732,7 +845,10 @@ def main() -> None:
 
     alloc = load("alloc_*.csv")
     if alloc is not None:
+        # Files from before --evict existed have no evict column.
+        alloc = alloc.assign(evict=alloc["evict"].fillna(0) if "evict" in alloc else 0)
         plot_alloc(alloc, timing)
+        plot_alloc_evict(alloc, timing)
 
     print(f"plots written to {PLOTS}\nsummaries written to {SUMMARY}")
 

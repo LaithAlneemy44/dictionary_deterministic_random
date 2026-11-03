@@ -21,9 +21,13 @@
 #   E   distinct keys, cache lines and pages read per operation (probe keys): int-like keys on
 #       uniform/sorted/reverse/zipf/zipf_shuffled/steady, large-string keys on uniform/sorted/reverse
 #   G   allocator alone (dict_alloc_bench), with block sizes modelled on each structure's nodes
+#   G2  as G (10 reps), with 4 or 16 cache-evicting reads before each allocation and free
+#   H   heap layout: page gaps between allocations (int keys) and whether each string buffer shares its
+#       node's page (large-string probe keys), uniform/sorted/reverse
 #
-# Every instrumented group (C*, D, D2, E) also records heap allocations per operation and their sizes.
-# D2 and G are not in the default set; name them with -Groups.
+# Every instrumented group (C*, D, D2, E, H) also records heap allocations per operation, their sizes
+# and the page gap between consecutive allocations.
+# D2, G, G2 and H are not in the default set; name them with -Groups.
 
 param([switch]$Quick, [string]$BinDir, [string[]]$Groups = @('A1', 'A2', 'B', 'C1', 'C2', 'C3', 'D', 'E'))
 
@@ -134,6 +138,24 @@ if ($Groups -contains 'G') {
     Write-Host '== G (allocator alone) =='
     Invoke-Bench 'dict_alloc_bench.exe' @('--n', $mid, '--model', 'fixed:48,tower:32:8', '--reps', 5,
         '--out', (Result-Path 'alloc_G.csv'))
+}
+
+if ($Groups -contains 'G2') {
+    Write-Host '== G2 (allocator after cache-evicting reads) =='
+    foreach ($evict in 4, 16) {
+        Invoke-Bench 'dict_alloc_bench.exe' @('--n', $mid, '--model', 'fixed:48,tower:32:8', '--reps', 10,
+            '--evict', $evict, '--out', (Result-Path "alloc_G2_e$evict.csv"))
+    }
+}
+
+if ($Groups -contains 'H') {
+    Write-Host '== H (heap layout) =='
+    Invoke-Bench 'dict_bench_instrumented.exe' @('--impl', 'red_black_tree,skip_list', '--key', 'int',
+        '--workload', 'uniform,sorted,reverse', '--n', $mid, '--input-seeds', 1, '--algo-seeds', 1,
+        '--reps', 1, '--warmup', 0, '--out', (Result-Path 'layout_counts_H.csv'), '--hist-out', (Result-Path 'layout_hist_H.csv'))
+    Invoke-Bench 'dict_bench_instrumented.exe' @('--impl', 'red_black_tree,skip_list', '--key', 'probe_large_string',
+        '--workload', 'uniform,sorted,reverse', '--n', $mid, '--input-seeds', 1, '--algo-seeds', 1,
+        '--reps', 1, '--warmup', 0, '--out', (Result-Path 'layout_counts_H2.csv'), '--hist-out', (Result-Path 'layout_hist_H2.csv'))
 }
 
 Write-Host ("Results written to $results in {0:N1} min" -f ((Get-Date) - $started).TotalMinutes)
