@@ -260,7 +260,7 @@ At 10⁶, the tree reads 1.2 pages per key it compares against, and the skip lis
 
 ## Second follow-up: heap layout and allocator misses
 
-Run on 2026-11-03: groups H (heap layout, 1.8 minutes) and G2 (allocator after cache-evicting reads, 0.7 minutes). All 34 unit tests passed first. These test the two guesses left open above.
+Run on 2026-11-03: groups H (heap layout, 1.8 minutes) and G2 (allocator after cache-evicting reads, 0.7 minutes). All 34 unit tests passed first. These test the two guesses left open above. G2 was re-run with the PC idle, because the first run may have overlapped other use of the machine. The figures below are from the re-run; the first run reached the same conclusion.
 
 ### Heap layout explains the page results (`layout.png`, `summary/layout_page_gap.csv`, `summary/layout_strings.csv`)
 
@@ -294,11 +294,11 @@ The tree's node and buffer pages are mostly the same pages. The skip list's bare
 | Reads before each operation | Allocate, 48-byte | Allocate, tower-sized | Free, 48-byte | Free, tower-sized |
 |---|---|---|---|---|
 | 0 (group G) | 43 | 42 | 28 | 35 |
-| 4 | 43 | 45 | 9 | 10 |
-| 16 | 53 | 32 | 33 | 26 |
+| 4 | 38 | 43 | 6 | 7 |
+| 16 | 44 | 58 | 8 | 20 |
 
 **Verdict: refuted.**
-- With the cache evicted, allocation costs 30–90 ns for both node shapes across all n, with no consistent difference between them. The run-to-run noise is about ±20 ns.
+- With the cache evicted, allocation costs 18–72 ns across all n, and freeing −5 to 44 ns. Neither node shape is consistently dearer: at 10⁶ with 16 reads, tower-sized blocks cost 15 ns more to allocate, but with 4 reads only 6 ns more, and at other n the order flips. The run-to-run noise is about ±20 ns.
 - The skip list's write gap at 10⁶ (93 ns for inserts, 97 ns for erases) is far larger than any difference here.
 - **Caveats:**
   - Subtracting the reads is approximate, because the CPU can overlap some allocator work with them.
