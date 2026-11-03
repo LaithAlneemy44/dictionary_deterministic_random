@@ -109,7 +109,7 @@ def run_seeds(sizes: list[int], seeds: int, searches: int, top_k: int) -> pd.Dat
             c, _ = search_costs(h, targets)
             # Node counts on the levels around log2 n, where the top of the search happens.
             base = int(math.log2(n))
-            counts = {f"count_l{base - k}": int((h > base - k).sum()) for k in range(top_k)}
+            counts = {f"count_log2n_minus_{k}": int((h > base - k).sum()) for k in range(top_k)}
             rows.append({"n": n, "seed": s, "mean_comparisons": c.mean(), "top": int(h.max()), **counts})
     return pd.DataFrame(rows)
 
@@ -119,7 +119,7 @@ def explained(df: pd.DataFrame) -> pd.DataFrame:
     rows = []
     for n, g in df.groupby("n"):
         y = g["mean_comparisons"].to_numpy()
-        cols = [c for c in g.columns if c.startswith("count_l")] + ["top"]
+        cols = [c for c in g.columns if c.startswith("count_log2n")] + ["top"]
         x = np.column_stack([np.ones(len(g))] + [g[c].to_numpy(dtype=float) for c in cols])
         beta, *_ = np.linalg.lstsq(x, y, rcond=None)
         resid = y - x @ beta
@@ -171,9 +171,9 @@ def main() -> None:
     ax1.set_xlabel("n")
     ax1.set_ylabel("spread across seeds (p95 / p5)", color="tab:blue")
     ax2 = ax1.twinx()
-    ax2.plot(e["n"], e["r2_top_levels"], marker="s", color="tab:orange", label="RÂ² from top-level counts")
+    ax2.plot(e["n"], e["r2_top_levels"], marker="s", color="tab:orange", label="RÃ‚Â² from top-level counts")
     ax2.set_ylim(0, 1)
-    ax2.set_ylabel("share explained by top levels (RÂ²)", color="tab:orange")
+    ax2.set_ylabel("share explained by top levels (RÃ‚Â²)", color="tab:orange")
     ax1.set_title("Skip list model: seed spread and top levels")
     fig.tight_layout()
     fig.savefig(root / "plots" / "sim_seeds.png", dpi=150)

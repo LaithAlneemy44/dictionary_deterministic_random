@@ -149,7 +149,7 @@ Ranges cover the insert, find and erase phases.
 - The zipf comparison should use zipf_shuffled, or report both workloads and explain the difference.
 - The large-string and large-n write results leave a cost the current counters do not explain. Cache-miss counts from a profiler would test the speculation in sections 2 and 3.
 
-## Follow-up tests (written, not yet run)
+## Follow-up tests
 
 | Open question | Test | Run with | Output |
 |---|---|---|---|
@@ -166,3 +166,94 @@ Limits:
 - `dict_alloc_bench` assumes 48-byte tree nodes and 32 + 8h-byte skip list nodes for int keys, worked out from the headers. Check them against the `alloc_size` histogram from group C1.
 
 Two tests need changes to the skip list, so they are left to Laith: a read-only count of nodes per level (to test section 6 on the real structure rather than the model), and a pool allocator shared by both structures (also needs Aaron's agreement).
+
+## Follow-up results
+
+Run on 2026-11-04: groups C1, D2, E and G (17.5 minutes), plus `scripts/simulate_skiplist.py`. All 34 unit tests passed first.
+
+### Section 6: the seed spread does shrink (`seeds_spread_ci.png`, `sim_seeds.png`)
+
+**Measured.** Skip list, 200 algorithm seeds, one input seed. Spread of mean node visits per operation (p95 ÷ p5) with 95% bootstrap intervals:
+
+| n | find | insert | erase |
+|---|---|---|---|
+| 10³ | 1.34 (1.31–1.39) | 1.28 (1.22–1.32) | 1.29 (1.24–1.35) |
+| 10⁴ | 1.24 (1.20–1.30) | 1.19 (1.16–1.22) | 1.20 (1.18–1.24) |
+| 10⁵ | 1.21 (1.18–1.23) | 1.16 (1.15–1.20) | 1.15 (1.14–1.17) |
+| 3·10⁵ | 1.16 (1.15–1.18) | 1.14 (1.12–1.17) | 1.13 (1.12–1.16) |
+
+The model simulation gives the same picture for comparisons per search: 1.25, 1.17, 1.15 and 1.15 at n = 10³ to 10⁶.
+
+**Verdict: the original theory 6 is supported, but the spread shrinks slowly.**
+- With 200 seeds, the spread falls steadily at every step, and the intervals barely overlap. The up-and-down pattern from 20 seeds (1.32, 1.11, 1.24, 1.17) was sampling noise.
+- The shrinking slows down: the model's spread is almost flat from 10⁵ to 10⁶, at about 1.15.
+- In the model, the node counts on the top levels explain 40–57% of the spread across seeds (R²). So the revised theory is partly right: the top of the structure sets a large share of a seed's cost, and that share doesn't fall as n grows. It doesn't explain everything.
+- The **time** spreads in D2 are not usable. At 10⁵ and above they reach 1.34–1.69, far wider than the node-visit spreads, and wider than group D's 1.10–1.28 with the same settings. D2 timed one repetition per seed, so this is most likely noise on the machine during the run.
+
+### Section 2: why 1.4 and not 1.5 (`sim_distinct.png`)
+
+**Measured.** The model simulation, with no C++ code involved, gives 1.38–1.42·log₂n distinct nodes per search and 1.87–1.90·log₂n comparisons. The implementation measured 1.38–1.45 and 1.89–2.00.
+
+**Verdict: the formula is off, not the implementation.** The ((1−p²)/p)·log₁/ₚn formula overestimates by about 6%. A likely reason is that it ignores the top levels, where the search starts and makes fewer moves than the formula assumes. That reason is a guess.
+
+### Section 4: sorted builds have better page locality (`locality.png`)
+
+**Measured.** Probe keys, mean per lookup at n = 10⁶:
+
+| | Distinct keys | Cache lines of key bytes | Pages of key bytes |
+|---|---|---|---|
+| Skip list, uniform build | 28.9 | 28.9 | 25.3 |
+| Skip list, sorted build | 29.2 | 29.1 | 15.2 |
+| Skip list, reverse build | 29.4 | 29.4 | 15.1 |
+| Tree, uniform build | 19.9 | 19.9 | 17.0 |
+| Tree, sorted build | 19.8 | 19.8 | 14.4 |
+
+**Verdict: supported, at the level of pages, not cache lines.**
+- Every key read sits on its own cache line whatever the build order, so cache lines show no difference.
+- After a sorted or reverse build, the skip list's keys share pages: 15 pages per lookup instead of 25, 40% fewer. The tree gains much less, 15% fewer.
+- This matches the times: after an ordered build, the skip list's lookups were 17–20% faster, and the tree's barely changed. The mechanism is probably fewer TLB misses (page-translation misses), but the pages are counted here, not the misses.
+
+### Section 2: the large-string gap is in pages (`ratio_sources.png`)
+
+**Measured.** Large-string probe keys, uniform find, skip list ÷ tree:
+
+| n | Distinct keys | Cache lines (node + string buffer) | Pages |
+|---|---|---|---|
+| 10⁴ | 1.45 | 1.46 | 2.18 |
+| 10⁵ | 1.40 | 1.39 | 2.12 |
+| 10⁶ | 1.45 | 1.46 | 2.15 |
+
+At 10⁶, the tree reads 1.2 pages per key it compares against, and the skip list 1.8.
+
+**Verdict: the extra cost is explained by pages, not cache lines.**
+- Cache lines follow distinct keys exactly, so they don't explain the time ratio (1.51–1.57) being above the distinct-key ratio (about 1.45).
+- Pages do: the skip list touches more than twice as many. For the tree, a node and its string buffer are usually on the same page. For the skip list, they usually are not.
+- **Speculation:** the Windows heap groups blocks of the same size together. A tree node with a string key (72 bytes) and its 65-byte string buffer probably fall in the same size class, so they end up next to each other. Skip list nodes come in many sizes, one per tower height, so most land in a different size class from their buffer, on a different page. This hasn't been tested.
+
+### Section 3: allocation does not explain the write cost (`alloc_vs_write.png`)
+
+**Measured.**
+- Allocation sizes for int keys match the model exactly: every tree node is 48 bytes, and skip list nodes are 32 + 8h bytes (half are 40, a quarter 48, and so on up to 192).
+- Every insert allocates exactly once and every erase frees exactly once, in both structures.
+- In the steady workload, each write does the same search work as its matching lookup: the comparisons, distinct keys and pages are within 1% of each other.
+- The allocator alone (`dict_alloc_bench`):
+
+| n | Allocate, 48-byte blocks | Allocate, tower-sized blocks | Free, 48-byte | Free, tower-sized |
+|---|---|---|---|---|
+| 10⁴ | 40 ns | 42 ns | 11 ns | 15 ns |
+| 10⁵ | 41 ns | 42 ns | 15 ns | 16 ns |
+| 10⁶ | 43 ns | 42 ns | 28 ns | 35 ns |
+
+**Verdict: refuted.**
+- Allocation alone costs the same for both node shapes, about 42 ns. That matches the extra cost of an insert at small n for both structures, so at small n the extra cost is mostly allocation.
+- At 10⁶ the skip list's insert costs 227 ns beyond its search, and the tree's 134 ns. Allocation alone accounts for about 42 ns of each. The 93 ns gap is not allocation in isolation, and not extra search.
+- The erase gap (139 vs 42 ns) is likewise far larger than the difference in free times (35 vs 28 ns).
+
+**What is left (speculation).** The benchmark allocates in a tight loop, so the allocator's own bookkeeping stays in cache. In the real workload each allocation follows a search that misses cache. The tree always uses one size class, which stays hot. The skip list spreads its nodes over about 15 size classes, so its allocations may miss on the allocator's bookkeeping. A test: interleave the allocation benchmark with random memory reads to evict the cache, or give both structures the same pool allocator.
+
+### What changed
+
+- **H4 / section 6:** the seed spread does shrink with n, but slowly. The earlier "not supported" verdict came from too few seeds.
+- **Section 2:** the formula overestimates by about 6%, and the implementation is consistent with the model.
+- **Section 2 (large strings) and section 4:** page counts explain both the sorted-build speed-up and the large-string gap. The heap layout of variable-size nodes looks like the common cause, which is untested.
+- **Section 3:** allocation is ruled out as a cost in isolation. The write gap at large n is still unexplained.
