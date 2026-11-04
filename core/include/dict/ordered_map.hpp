@@ -2,6 +2,9 @@
 
 // The common interface every dictionary implementation must satisfy.
 //
+// Implementations are dictionaries of unique keys, each mapped to a value.
+// Inserting a key that is already present overwrites its value.
+//
 // Tests and benchmarks are written once against this concept and instantiated
 // for each implementation, so both structures are exercised by identical code
 // on identical inputs.
@@ -40,6 +43,10 @@ concept OrderedMap =
         // Pointer to the value for k, or nullptr if absent.
         { cm.find(k) } -> std::same_as<const typename M::mapped_type*>;
         { cm.contains(k) } -> std::same_as<bool>;
+        // Reference to the value for k. Throws std::out_of_range if k is absent;
+        // never inserts.
+        { m[k] } -> std::same_as<typename M::mapped_type&>;
+        { cm[k] } -> std::same_as<const typename M::mapped_type&>;
         // Remove k. Returns true if it was present.
         { m.erase(k) } -> std::same_as<bool>;
 
@@ -47,10 +54,8 @@ concept OrderedMap =
         { cm.empty() } -> std::same_as<bool>;
         { m.clear() };
 
-        // Visit every (key, value) in ascending key order.
+        // Visit every (key, value) in ascending key order. Used by tests only.
         { cm.for_each(visit) };
-        // Visit every (key, value) with lo <= key <= hi in ascending order.
-        { cm.for_each_in_range(k, k, visit) };
 
         // Full structural self-check (e.g. red-black properties, heap or level ordering). Used by tests only.
         { cm.check_invariants() } -> std::same_as<bool>;

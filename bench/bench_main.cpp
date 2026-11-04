@@ -1,41 +1,166 @@
 // Unified benchmark harness.
 //
 // Built twice from this one source file:
-//   dict_bench               timing build: DICT_COUNT compiled out, wall-clock per phase
-//   dict_bench_instrumented  counting build: structural counters per phase, plus
-//                            per-operation cost histograms (the distributions)
+//   dict_bench               timing build: DICT_COUNT compiled out, wall-clock per
+//                            phase, and optionally per-operation latency
+//                            distributions (--latency-out)
+//   dict_bench_instrumented  counting build: structural counters per phase,
+//                            per-operation cost histograms (the distributions),
+//                            and heap bytes held by the structure (memory)
 //
-// Timing and counting are never mixed in one binary, so the counters cannot
-// distort the timings.
+// Timing and counting are never mixed in one binary, so the counters and the
+// heap tracking cannot distort the timings.
 //
 // Every implementation replays exactly the same generated workload. Workloads
-// are generated before any timing starts.
+// are generated, and converted to the chosen key type, before any timing
+// starts.
 //
 // Seeds: --input-seeds varies the input (key sequence); --algo-seeds varies the
 // randomized structure's internal RNG while the input stays fixed.
 // Deterministic structures ignore the algorithm seed, so for them it acts as
 // another repetition.
+//
+// Key types (--key): int, small_string (fits the small string buffer, no heap
+// allocation) and large_string (always heap allocated). See dict/keys.hpp.
+// The instrumented build also accepts probe, a key that orders like int, and
+// probe_large_string, one that orders like large_string. Both record the
+// distinct stored keys each operation reads and the cache lines and pages
+// those reads touch (dict/probe_key.hpp), written as the distinct_keys,
+// cache_lines and pages histograms. The pages are also split into node_pages
+// (key objects, inside the nodes) and buffer_pages (separate string buffers),
+// and same_page_keys counts the keys read whose buffer is on their node's page.
+//
+// The instrumented build also replaces global operator new and delete to count
+// the heap allocations each operation makes (heap_allocs, heap_frees) and their
+// sizes (alloc_size: value = bytes requested, count = allocations), and the
+// distance in 4 KiB pages from each allocation to the one before it
+// (alloc_page_gap, capped at kMaxGap). Allocations
+// made inside the libstdc++ DLL (e.g. some std::string copies) bypass the
+// replacement, so these counts are only complete for int and probe keys.
 
 #include <algorithm>
+#include <array>
 #include <chrono>
+#include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
-#include <iostream>
 #include <map>
+#include <new>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
+#if defined(_MSC_VER)
+#include <intrin.h>
+#define DICT_HAS_TSC 1
+#elif defined(__x86_64__) || defined(__i386__)
+#include <x86intrin.h>
+#define DICT_HAS_TSC 1
+#endif
+
+#include "dict/keys.hpp"
 #include "dict/ordered_map.hpp"
+#include "dict/probe_key.hpp"
 #include "dict/red_black_tree.hpp"
 #include "dict/skip_list_adapter.hpp"
 #include "dict/std_map_adapter.hpp"
 #include "dict/workloads.hpp"
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+
+// ---- Allocation tracking (instrumented build) -------------------------------
+//
+// Counts only while `active` is set, which the harness does around each
+// operation, so its own allocations (histograms, probe vectors) are excluded.
+// Sizes above kMaxSize share the last bucket. The counters exist in both builds
+// so the harness compiles unchanged; only the instrumented build replaces new.
+namespace alloc_track {
+inline constexpr std::size_t kMaxSize = 1024;
+inline bool active = false;
+inline std::uint64_t allocs = 0;
+inline std::uint64_t frees = 0;
+inline std::array<std::uint64_t, kMaxSize + 1> sizes{};
+inline constexpr std::size_t kMaxGap = 1024;
+inline std::uintptr_t last_page = 0;  // page of the previous counted allocation, 0 = none yet
+inline std::array<std::uint64_t, kMaxGap + 1> page_gaps{};
+}  // namespace alloc_track
+
+#ifdef DICT_INSTRUMENT
+void* operator new(std::size_t n) {
+    void* p = std::malloc(n ? n : 1);
+    if (!p) throw std::bad_alloc();
+    if (alloc_track::active) {
+        ++alloc_track::allocs;
+        ++alloc_track::sizes[std::min(n, alloc_track::kMaxSize)];
+        const std::uintptr_t page = reinterpret_cast<std::uintptr_t>(p) / 4096;
+        if (alloc_track::last_page) {
+            const std::uintptr_t gap = page > alloc_track::last_page ? page - alloc_track::last_page
+                                                                     : alloc_track::last_page - page;
+            ++alloc_track::page_gaps[std::min<std::uintptr_t>(gap, alloc_track::kMaxGap)];
+        }
+        alloc_track::last_page = page;
+    }
+    return p;
+}
+
+void operator delete(void* p) noexcept {
+    if (alloc_track::active && p) ++alloc_track::frees;
+    std::free(p);
+}
+
+void operator delete(void* p, std::size_t) noexcept { ::operator delete(p); }
+#endif
+
 namespace {
+
+// ---- Heap usage (instrumented build, --mem-out) -----------------------------
+//
+// Walks every process heap and sums the blocks in use. This sees every
+// allocation, including those made inside the C++ runtime DLL (e.g. std::string
+// buffers), plus the allocator's own per-block overhead. A structure's memory
+// is the difference between a snapshot taken before it is built and one taken
+// after its insert phase. Windows only; elsewhere the columns are left empty.
+struct HeapUsage {
+    std::int64_t bytes = 0;     // bytes requested by the program
+    std::int64_t overhead = 0;  // allocator bookkeeping for those blocks
+    std::int64_t blocks = 0;
+    bool valid = false;
+};
+
+HeapUsage heap_usage() {
+    HeapUsage u;
+#ifdef _WIN32
+    std::vector<HANDLE> heaps(GetProcessHeaps(0, nullptr) + 16);
+    heaps.resize(GetProcessHeaps(static_cast<DWORD>(heaps.size()), heaps.data()));
+    for (HANDLE h : heaps) {
+        if (!HeapLock(h)) continue;
+        PROCESS_HEAP_ENTRY e{};
+        while (HeapWalk(h, &e)) {
+            if (e.wFlags & PROCESS_HEAP_ENTRY_BUSY) {
+                u.bytes += static_cast<std::int64_t>(e.cbData);
+                u.overhead += static_cast<std::int64_t>(e.cbOverhead);
+                ++u.blocks;
+            }
+        }
+        HeapUnlock(h);
+    }
+    u.valid = true;
+#endif
+    return u;
+}
 
 using dict::Key;
 using dict::Value;
@@ -50,6 +175,7 @@ constexpr const char* kBuild = "timing";
 
 struct Options {
     std::vector<std::string> impls{"std_map", "red_black_tree", "skip_list"};
+    std::vector<std::string> keys{"int"};
     std::vector<std::string> workloads{"uniform"};
     std::vector<std::size_t> sizes{100'000};
     std::uint64_t input_seeds = 1;
@@ -58,6 +184,9 @@ struct Options {
     int warmup = 1;
     std::string out = "results.csv";
     std::string hist_out = "histograms.csv";  // instrumented build only
+    std::string latency_out;                  // timing build only; empty = off
+    std::string latency_hist_out;             // timing build only; empty = off
+    std::string mem_out;                      // instrumented build only; empty = off
 };
 
 std::vector<std::string> split(const std::string& s) {
@@ -73,15 +202,22 @@ std::vector<std::string> split(const std::string& s) {
     if (msg) std::fprintf(stderr, "error: %s\n\n", msg);
     std::fprintf(stderr,
                  "usage: dict_bench [options]\n"
-                 "  --impl LIST         comma list of std_map,red_black_tree,skip_list (default all)\n"
-                 "  --workload LIST     comma list of uniform,sorted,reverse,sliding_window,zipf, or 'all'\n"
-                 "  --n LIST            comma list of sizes (default 100000)\n"
-                 "  --input-seeds K     number of distinct input seeds (default 1)\n"
-                 "  --algo-seeds S      number of algorithm seeds per input (default 1)\n"
-                 "  --reps R            timed repetitions per (input, algo) seed pair (default 5)\n"
-                 "  --warmup W          discarded warm-up repetitions (default 1)\n"
-                 "  --out FILE          per-phase CSV (default results.csv)\n"
-                 "  --hist-out FILE     per-op histogram CSV, instrumented build only (default histograms.csv)\n");
+                 "  --impl LIST          comma list of std_map,red_black_tree,skip_list (default all)\n"
+                 "  --key LIST           comma list of int,small_string,large_string, or 'all' (default int);\n"
+                 "                       the instrumented build also accepts probe and probe_large_string\n"
+                 "                       (record distinct keys, cache lines and pages read)\n"
+                 "  --workload LIST      comma list of uniform,sorted,reverse,sliding_window,zipf,zipf_shuffled,\n"
+                 "                       steady, or 'all'\n"
+                 "  --n LIST             comma list of sizes (default 100000)\n"
+                 "  --input-seeds K      number of distinct input seeds (default 1)\n"
+                 "  --algo-seeds S       number of algorithm seeds per input (default 1)\n"
+                 "  --reps R             timed repetitions per (input, algo) seed pair (default 5)\n"
+                 "  --warmup W           discarded warm-up repetitions (default 1)\n"
+                 "  --out FILE           per-phase CSV (default results.csv)\n"
+                 "  --hist-out FILE      per-op cost histogram CSV, instrumented build only (default histograms.csv)\n"
+                 "  --latency-out FILE   timing build: also time every operation, write percentiles to FILE\n"
+                 "  --latency-hist-out FILE  timing build: per-op latency histogram (log bins) for CCDF plots\n"
+                 "  --mem-out FILE       instrumented build: heap held by each structure after its insert phase\n");
     std::exit(msg ? 2 : 0);
 }
 
@@ -95,7 +231,11 @@ Options parse(int argc, char** argv) {
         };
         if (a == "--help" || a == "-h") usage(nullptr);
         else if (a == "--impl") o.impls = split(next());
-        else if (a == "--workload") {
+        else if (a == "--key") {
+            const std::string k = next();
+            if (k == "all") o.keys.assign(dict::key_kind_names().begin(), dict::key_kind_names().end());
+            else o.keys = split(k);
+        } else if (a == "--workload") {
             const std::string w = next();
             if (w == "all") o.workloads.assign(dict::workload_families().begin(), dict::workload_families().end());
             else o.workloads = split(w);
@@ -108,24 +248,71 @@ Options parse(int argc, char** argv) {
         else if (a == "--warmup") o.warmup = std::stoi(next());
         else if (a == "--out") o.out = next();
         else if (a == "--hist-out") o.hist_out = next();
+        else if (a == "--latency-out") o.latency_out = next();
+        else if (a == "--latency-hist-out") o.latency_hist_out = next();
+        else if (a == "--mem-out") o.mem_out = next();
         else usage(("unknown flag: " + std::string(a)).c_str());
+    }
+    for (const auto& k : o.keys) {
+        if (k == "probe" || k == "probe_large_string") {
+            if (!kInstrumented) usage("probe keys need the instrumented build (dict_bench_instrumented)");
+        } else if (std::find(dict::key_kind_names().begin(), dict::key_kind_names().end(), k) ==
+                   dict::key_kind_names().end()) {
+            usage(("unknown key type: " + k).c_str());
+        }
     }
     return o;
 }
 
-// Per-operation cost histogram: metric value -> number of operations with that value.
-using Histogram = std::map<std::uint64_t, std::uint64_t>;
+// ---- Workloads converted to a key type --------------------------------------
 
-struct PhaseHistograms {
-    Histogram comparisons, node_visits, structural;
+template <class K>
+struct TypedOp {
+    dict::OpKind kind;
+    K key;
+    Value value;  // the original 64-bit key, used as the inserted value
 };
+
+template <class K>
+struct TypedPhase {
+    std::string name;
+    std::vector<TypedOp<K>> ops;
+};
+
+template <class K>
+K convert_key(Key k, dict::KeyKind kind) {
+    if constexpr (std::is_same_v<K, std::string>) {
+        return kind == dict::KeyKind::LargeString ? dict::large_string_key(k) : dict::small_string_key(k);
+    } else if constexpr (std::is_same_v<K, dict::ProbeKey>) {
+        (void)kind;
+        return dict::ProbeKey(k);
+    } else if constexpr (std::is_same_v<K, dict::ProbeString>) {
+        (void)kind;
+        return dict::ProbeString(dict::large_string_key(k));
+    } else {
+        (void)kind;
+        return k;
+    }
+}
+
+template <class K>
+std::vector<TypedPhase<K>> convert(const dict::Workload& w, dict::KeyKind kind) {
+    std::vector<TypedPhase<K>> phases;
+    for (const dict::Phase& p : w.phases) {
+        TypedPhase<K> tp{p.name, {}};
+        tp.ops.reserve(p.ops.size());
+        for (const dict::Op& op : p.ops) tp.ops.push_back({op.kind, convert_key<K>(op.key, kind), op.key});
+        phases.push_back(std::move(tp));
+    }
+    return phases;
+}
 
 // Applies one operation. Returns a value folded into a checksum so the
 // optimizer cannot discard lookups.
-template <class M>
-inline std::uint64_t apply(M& m, const dict::Op& op) {
+template <class M, class K>
+inline std::uint64_t apply(M& m, const TypedOp<K>& op) {
     switch (op.kind) {
-        case dict::OpKind::Insert: return m.insert(op.key, op.key);
+        case dict::OpKind::Insert: return m.insert(op.key, op.value);
         case dict::OpKind::Find: {
             const Value* v = m.find(op.key);
             return v ? *v : 0;
@@ -135,72 +322,267 @@ inline std::uint64_t apply(M& m, const dict::Op& op) {
     return 0;
 }
 
+// ---- Per-operation timing (timing build, --latency-out) ---------------------
+
+#ifdef DICT_HAS_TSC
+// lfence keeps the timed operation from being reordered across the reads.
+inline std::uint64_t tick_start() {
+    _mm_lfence();
+    const std::uint64_t t = __rdtsc();
+    _mm_lfence();
+    return t;
+}
+inline std::uint64_t tick_stop() {
+    unsigned aux;
+    const std::uint64_t t = __rdtscp(&aux);
+    _mm_lfence();
+    return t;
+}
+#else
+inline std::uint64_t tick_start() {
+    return static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+}
+inline std::uint64_t tick_stop() { return tick_start(); }
+#endif
+
+struct TickScale {
+    double ns_per_tick = 1.0;
+    double overhead_ticks = 0.0;  // median cost of an empty start/stop pair
+};
+
+// Measures ticks per nanosecond against steady_clock over ~200 ms, and the
+// median overhead of an empty timed region, which is subtracted from every
+// operation.
+TickScale calibrate_ticks() {
+    TickScale s;
+    const auto c0 = std::chrono::steady_clock::now();
+    const std::uint64_t t0 = tick_start();
+    while (std::chrono::steady_clock::now() - c0 < std::chrono::milliseconds(200)) {
+    }
+    const std::uint64_t t1 = tick_stop();
+    const auto c1 = std::chrono::steady_clock::now();
+    const double ns = static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(c1 - c0).count());
+    s.ns_per_tick = ns / static_cast<double>(t1 - t0);
+
+    std::vector<std::uint64_t> empty(10'001);
+    for (auto& e : empty) {
+        const std::uint64_t a = tick_start();
+        const std::uint64_t b = tick_stop();
+        e = b - a;
+    }
+    std::nth_element(empty.begin(), empty.begin() + empty.size() / 2, empty.end());
+    s.overhead_ticks = static_cast<double>(empty[empty.size() / 2]);
+    return s;
+}
+
+// Per-operation cost histogram: metric value -> number of operations with that value.
+using Histogram = std::map<std::uint64_t, std::uint64_t>;
+
+struct PhaseHistograms {
+    Histogram comparisons, node_visits, structural, heap_allocs, heap_frees;
+    Histogram distinct_keys, cache_lines, pages, node_pages, buffer_pages, same_page_keys;  // probe keys only
+};
+
+template <class K>
+inline constexpr bool kIsProbe = std::is_same_v<K, dict::ProbeKey> || std::is_same_v<K, dict::ProbeString>;
+
 struct Context {
     const Options& opt;
     std::ofstream& csv;
-    std::ofstream* hist;  // null in the timing build
+    std::ofstream* hist;          // null in the timing build
+    std::ofstream* latency;       // null unless --latency-out
+    std::ofstream* latency_hist;  // null unless --latency-hist-out
+    std::ofstream* mem;           // null unless --mem-out
+    TickScale ticks;
 };
 
+struct RunInfo {
+    const char* key;
+    const dict::Workload& w;
+    std::uint64_t algo_seed;
+};
+
+template <class M>
+void write_row_prefix(std::ostream& out, const RunInfo& r, const std::string& phase) {
+    out << M::name << ',' << r.key << ',' << r.w.family << ',' << r.w.n << ',' << r.w.input_seed << ','
+        << r.algo_seed << ',' << phase;
+}
+
 template <dict::OrderedMap M>
-void run_impl(Context& ctx, const dict::Workload& w, std::uint64_t algo_seed) {
+void run_impl(Context& ctx, const RunInfo& r, const std::vector<TypedPhase<typename M::key_type>>& phases) {
     const int total_reps = ctx.opt.warmup + ctx.opt.reps;
     for (int rep = 0; rep < total_reps; ++rep) {
         const bool warm = rep < ctx.opt.warmup;
-        M m = dict::make_map<M>(algo_seed);
+        M m = dict::make_map<M>(r.algo_seed);
 
-        for (const dict::Phase& phase : w.phases) {
+        for (const auto& phase : phases) {
             std::uint64_t checksum = 0;
             m.reset_counters();
             PhaseHistograms h;
 
             const auto t0 = std::chrono::steady_clock::now();
             if constexpr (kInstrumented) {
-                for (const dict::Op& op : phase.ops) {
+                constexpr bool kProbe = kIsProbe<typename M::key_type>;
+                alloc_track::sizes.fill(0);
+                alloc_track::page_gaps.fill(0);
+                alloc_track::last_page = 0;
+                for (const auto& op : phase.ops) {
                     const dict::OpCounters before = m.counters();
+                    const std::uint64_t allocs_before = alloc_track::allocs, frees_before = alloc_track::frees;
+                    if constexpr (kProbe) dict::probe::begin(&op.key);
+                    alloc_track::active = true;
                     checksum += apply(m, op);
+                    alloc_track::active = false;
                     const dict::OpCounters d = m.counters() - before;
                     ++h.comparisons[d.comparisons];
                     ++h.node_visits[d.node_visits];
                     ++h.structural[d.structural];
+                    ++h.heap_allocs[alloc_track::allocs - allocs_before];
+                    ++h.heap_frees[alloc_track::frees - frees_before];
+                    if constexpr (kProbe) {
+                        ++h.distinct_keys[dict::probe::read.size()];
+                        ++h.cache_lines[dict::probe::lines.size()];
+                        ++h.pages[dict::probe::pages.size()];
+                        ++h.node_pages[dict::probe::key_pages.size()];
+                        if constexpr (std::is_same_v<typename M::key_type, dict::ProbeString>) {
+                            ++h.buffer_pages[dict::probe::data_pages.size()];
+                            ++h.same_page_keys[dict::probe::same_page];
+                        }
+                    }
                 }
             } else {
-                for (const dict::Op& op : phase.ops) checksum += apply(m, op);
+                for (const auto& op : phase.ops) checksum += apply(m, op);
             }
             const auto t1 = std::chrono::steady_clock::now();
 
             if (warm) continue;
             const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
             const dict::OpCounters& c = m.counters();
-            ctx.csv << kBuild << ',' << M::name << ',' << w.family << ',' << w.n << ',' << w.input_seed << ','
-                    << algo_seed << ',' << rep - ctx.opt.warmup << ',' << phase.name << ',' << phase.ops.size()
-                    << ',' << ns << ',' << static_cast<double>(ns) / phase.ops.size() << ',' << c.comparisons
-                    << ',' << c.node_visits << ',' << c.structural << ',' << c.recolors << ',' << c.allocations
-                    << ',' << m.size() << ',' << checksum << '\n';
+            ctx.csv << kBuild << ',';
+            write_row_prefix<M>(ctx.csv, r, phase.name);
+            ctx.csv << ',' << rep - ctx.opt.warmup << ',' << phase.ops.size() << ',' << ns << ','
+                    << static_cast<double>(ns) / static_cast<double>(phase.ops.size()) << ',' << c.comparisons << ','
+                    << c.node_visits << ',' << c.structural << ',' << c.recolors << ',' << c.allocations << ','
+                    << m.size() << ',' << checksum << '\n';
 
             // Structure (and hence the histogram) is identical across reps for a
             // given (input, algo) seed pair, so write it once.
             if (ctx.hist && rep == ctx.opt.warmup) {
                 auto dump = [&](const char* metric, const Histogram& hist) {
-                    for (const auto& [value, count] : hist)
-                        *ctx.hist << M::name << ',' << w.family << ',' << w.n << ',' << w.input_seed << ','
-                                  << algo_seed << ',' << phase.name << ',' << metric << ',' << value << ','
-                                  << count << '\n';
+                    for (const auto& [value, count] : hist) {
+                        write_row_prefix<M>(*ctx.hist, r, phase.name);
+                        *ctx.hist << ',' << metric << ',' << value << ',' << count << '\n';
+                    }
                 };
                 dump("comparisons", h.comparisons);
                 dump("node_visits", h.node_visits);
                 dump("structural", h.structural);
+                dump("heap_allocs", h.heap_allocs);
+                dump("heap_frees", h.heap_frees);
+                dump("distinct_keys", h.distinct_keys);
+                dump("cache_lines", h.cache_lines);
+                dump("pages", h.pages);
+                dump("node_pages", h.node_pages);
+                dump("buffer_pages", h.buffer_pages);
+                dump("same_page_keys", h.same_page_keys);
+                if constexpr (kInstrumented) {
+                    // Per allocation, not per operation: value = bytes requested.
+                    Histogram sizes;
+                    for (std::size_t b = 0; b < alloc_track::sizes.size(); ++b)
+                        if (alloc_track::sizes[b]) sizes[b] = alloc_track::sizes[b];
+                    dump("alloc_size", sizes);
+                    Histogram gaps;
+                    for (std::size_t g = 0; g < alloc_track::page_gaps.size(); ++g)
+                        if (alloc_track::page_gaps[g]) gaps[g] = alloc_track::page_gaps[g];
+                    dump("alloc_page_gap", gaps);
+                }
+            }
+        }
+    }
+}
+
+// Builds the structure with the workload's first phase (insert n keys) and
+// records the heap it holds afterwards. Nothing else is allocated between the
+// two snapshots, so the difference is the structure's own memory.
+template <dict::OrderedMap M>
+void run_memory(Context& ctx, const RunInfo& r, const std::vector<TypedPhase<typename M::key_type>>& phases) {
+    const HeapUsage before = heap_usage();
+    std::uint64_t checksum = 0;
+    {
+        M m = dict::make_map<M>(r.algo_seed);
+        for (const auto& op : phases.front().ops) checksum += apply(m, op);
+        const HeapUsage after = heap_usage();
+        if (!after.valid) return;
+        write_row_prefix<M>(*ctx.mem, r, phases.front().name);
+        *ctx.mem << ',' << m.size() << ',' << after.bytes - before.bytes << ',' << after.overhead - before.overhead
+                 << ',' << after.blocks - before.blocks << ',' << checksum << '\n';
+    }
+}
+
+// Log-scale latency bin: 4 bins per doubling. Returns the bin's lower bound in ns.
+inline double latency_bin_floor(double ns) {
+    if (ns < 1.0) return 0.0;
+    const double b = std::floor(4.0 * std::log2(ns));
+    return std::exp2(b / 4.0);
+}
+
+// One extra run that times every operation individually. The timer reads add
+// a little cost to each operation, so this is kept separate from the phase
+// timings above.
+template <dict::OrderedMap M>
+void run_latency(Context& ctx, const RunInfo& r, const std::vector<TypedPhase<typename M::key_type>>& phases) {
+    M m = dict::make_map<M>(r.algo_seed);
+    std::vector<std::uint64_t> ticks;
+    for (const auto& phase : phases) {
+        ticks.assign(phase.ops.size(), 0);
+        std::uint64_t checksum = 0;
+        for (std::size_t i = 0; i < phase.ops.size(); ++i) {
+            const std::uint64_t a = tick_start();
+            checksum += apply(m, phase.ops[i]);
+            const std::uint64_t b = tick_stop();
+            ticks[i] = b - a;
+        }
+
+        std::vector<double> ns(ticks.size());
+        double sum = 0;
+        for (std::size_t i = 0; i < ticks.size(); ++i) {
+            const double t = static_cast<double>(ticks[i]) - ctx.ticks.overhead_ticks;
+            ns[i] = std::max(0.0, t) * ctx.ticks.ns_per_tick;
+            sum += ns[i];
+        }
+        std::sort(ns.begin(), ns.end());
+        auto pct = [&](double q) {
+            const auto idx = static_cast<std::size_t>(std::ceil(q * static_cast<double>(ns.size()))) - 1;
+            return ns[std::min(idx, ns.size() - 1)];
+        };
+
+        if (ctx.latency) {
+            write_row_prefix<M>(*ctx.latency, r, phase.name);
+            *ctx.latency << ',' << ns.size() << ',' << sum / static_cast<double>(ns.size()) << ',' << pct(0.5)
+                         << ',' << pct(0.9) << ',' << pct(0.99) << ',' << pct(0.999) << ',' << pct(0.9999) << ','
+                         << ns.back() << ',' << ctx.ticks.overhead_ticks * ctx.ticks.ns_per_tick << ',' << checksum
+                         << '\n';
+        }
+        if (ctx.latency_hist) {
+            std::map<double, std::uint64_t> bins;
+            for (double v : ns) ++bins[latency_bin_floor(v)];
+            for (const auto& [bin, count] : bins) {
+                write_row_prefix<M>(*ctx.latency_hist, r, phase.name);
+                *ctx.latency_hist << ',' << bin << ',' << count << '\n';
             }
         }
     }
 }
 
 template <dict::OrderedMap M>
-void run_if_selected(Context& ctx, const dict::Workload& w, std::uint64_t algo_seed) {
+void run_if_selected(Context& ctx, const RunInfo& r, const std::vector<TypedPhase<typename M::key_type>>& phases) {
     if (std::find(ctx.opt.impls.begin(), ctx.opt.impls.end(), M::name) == ctx.opt.impls.end()) return;
     if constexpr (!M::implemented) {
         return;  // stub: skipped (warned once in main)
     } else {
-        run_impl<M>(ctx, w, algo_seed);
+        run_impl<M>(ctx, r, phases);
+        if (ctx.latency || ctx.latency_hist) run_latency<M>(ctx, r, phases);
+        if (ctx.mem) run_memory<M>(ctx, r, phases);
     }
 }
 
@@ -212,49 +594,92 @@ void warn_if_stub(const Options& o) {
     }
 }
 
+// Converts the workload to key type K once, then runs every selected
+// implementation for every algorithm seed.
+template <class K>
+void run_key(Context& ctx, const dict::Workload& w, dict::KeyKind kind, const char* key_name) {
+    const auto phases = convert<K>(w, kind);
+    for (std::uint64_t as = 0; as < ctx.opt.algo_seeds; ++as) {
+        const RunInfo r{key_name, w, 1'000'000 + as};
+        std::fprintf(stderr, "%s %s n=%zu input_seed=%llu algo_seed=%llu\n", r.key, w.family.c_str(), w.n,
+                     static_cast<unsigned long long>(w.input_seed), static_cast<unsigned long long>(r.algo_seed));
+        run_if_selected<dict::StdMapAdapter<K, Value>>(ctx, r, phases);
+        run_if_selected<dict::RedBlackTree<K, Value>>(ctx, r, phases);
+        run_if_selected<dict::SkipListAdapter<K, Value>>(ctx, r, phases);
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
     const Options opt = parse(argc, argv);
 
-    using StdMap = dict::StdMapAdapter<Key, Value>;
-    using Rbt = dict::RedBlackTree<Key, Value>;
-    using Rand = dict::SkipListAdapter<Key, Value>;
-    warn_if_stub<StdMap>(opt);
-    warn_if_stub<Rbt>(opt);
-    warn_if_stub<Rand>(opt);
+    warn_if_stub<dict::StdMapAdapter<Key, Value>>(opt);
+    warn_if_stub<dict::RedBlackTree<Key, Value>>(opt);
+    warn_if_stub<dict::SkipListAdapter<Key, Value>>(opt);
 
     std::ofstream csv(opt.out);
     if (!csv) usage(("cannot open " + opt.out).c_str());
-    csv << "build,impl,workload,n,input_seed,algo_seed,rep,phase,ops,ns,ns_per_op,"
+    csv << "build,impl,key,workload,n,input_seed,algo_seed,phase,rep,ops,ns,ns_per_op,"
            "comparisons,node_visits,structural,recolors,allocations,final_size,checksum\n";
 
     std::ofstream hist;
     if (kInstrumented) {
         hist.open(opt.hist_out);
         if (!hist) usage(("cannot open " + opt.hist_out).c_str());
-        hist << "impl,workload,n,input_seed,algo_seed,phase,metric,value,count\n";
+        hist << "impl,key,workload,n,input_seed,algo_seed,phase,metric,value,count\n";
     }
-    Context ctx{opt, csv, kInstrumented ? &hist : nullptr};
 
-    for (const std::string& family : opt.workloads) {
-        for (std::size_t n : opt.sizes) {
-            for (std::uint64_t is = 0; is < opt.input_seeds; ++is) {
-                const std::uint64_t input_seed = 1'000 + is;
-                const dict::Workload w = dict::make_workload(family, n, input_seed);
-                for (std::uint64_t as = 0; as < opt.algo_seeds; ++as) {
-                    const std::uint64_t algo_seed = 1'000'000 + as;
-                    std::fprintf(stderr, "%s n=%zu input_seed=%llu algo_seed=%llu\n", family.c_str(), n,
-                                 static_cast<unsigned long long>(input_seed),
-                                 static_cast<unsigned long long>(algo_seed));
-                    run_if_selected<StdMap>(ctx, w, algo_seed);
-                    run_if_selected<Rbt>(ctx, w, algo_seed);
-                    run_if_selected<Rand>(ctx, w, algo_seed);
+    std::ofstream latency, latency_hist;
+    if (!kInstrumented && !opt.latency_out.empty()) {
+        latency.open(opt.latency_out);
+        if (!latency) usage(("cannot open " + opt.latency_out).c_str());
+        latency << "impl,key,workload,n,input_seed,algo_seed,phase,ops,mean_ns,p50_ns,p90_ns,p99_ns,p999_ns,"
+                   "p9999_ns,max_ns,timer_overhead_ns,checksum\n";
+    }
+    if (!kInstrumented && !opt.latency_hist_out.empty()) {
+        latency_hist.open(opt.latency_hist_out);
+        if (!latency_hist) usage(("cannot open " + opt.latency_hist_out).c_str());
+        latency_hist << "impl,key,workload,n,input_seed,algo_seed,phase,bin_ns,count\n";
+    }
+
+    std::ofstream mem;
+    if (kInstrumented && !opt.mem_out.empty()) {
+        mem.open(opt.mem_out);
+        if (!mem) usage(("cannot open " + opt.mem_out).c_str());
+        mem << "impl,key,workload,n,input_seed,algo_seed,phase,size,heap_bytes,heap_overhead,heap_blocks,checksum\n";
+    }
+
+    Context ctx{opt,
+                csv,
+                kInstrumented ? &hist : nullptr,
+                latency.is_open() ? &latency : nullptr,
+                latency_hist.is_open() ? &latency_hist : nullptr,
+                mem.is_open() ? &mem : nullptr,
+                {}};
+    if (ctx.latency || ctx.latency_hist) {
+        ctx.ticks = calibrate_ticks();
+        std::fprintf(stderr, "timer: %.4f ns/tick, overhead %.1f ns\n", ctx.ticks.ns_per_tick,
+                     ctx.ticks.overhead_ticks * ctx.ticks.ns_per_tick);
+    }
+
+    for (const std::string& key : opt.keys) {
+        const dict::KeyKind kind = key == "int"            ? dict::KeyKind::Int
+                                   : key == "small_string" ? dict::KeyKind::SmallString
+                                                           : dict::KeyKind::LargeString;
+        for (const std::string& family : opt.workloads) {
+            for (std::size_t n : opt.sizes) {
+                for (std::uint64_t is = 0; is < opt.input_seeds; ++is) {
+                    const dict::Workload w = dict::make_workload(family, n, 1'000 + is);
+                    if (key == "probe") run_key<dict::ProbeKey>(ctx, w, kind, "probe");
+                    else if (key == "probe_large_string")
+                        run_key<dict::ProbeString>(ctx, w, kind, "probe_large_string");
+                    else if (kind == dict::KeyKind::Int) run_key<Key>(ctx, w, kind, dict::key_kind_name(kind));
+                    else run_key<std::string>(ctx, w, kind, dict::key_kind_name(kind));
                 }
             }
         }
     }
-    std::fprintf(stderr, "wrote %s%s%s\n", opt.out.c_str(), kInstrumented ? " and " : "",
-                 kInstrumented ? opt.hist_out.c_str() : "");
+    std::fprintf(stderr, "wrote %s\n", opt.out.c_str());
     return 0;
 }

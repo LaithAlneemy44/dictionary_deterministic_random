@@ -10,7 +10,6 @@
 // not expose node visits or rotations.
 
 #include <cstddef>
-#include <functional>
 #include <map>
 #include <memory>
 
@@ -18,7 +17,7 @@
 
 namespace dict {
 
-template <class K, class V, class Compare = std::less<K>>
+template <class K, class V>
 class StdMapAdapter {
 public:
     using key_type = K;
@@ -27,7 +26,7 @@ public:
     static constexpr const char* name = "std_map";
     static constexpr bool implemented = true;
 
-    StdMapAdapter() : counters_(std::make_unique<OpCounters>()), map_(CountingLess{counters_.get(), {}}) {}
+    StdMapAdapter() : counters_(std::make_unique<OpCounters>()), map_(CountingLess{counters_.get()}) {}
 
     bool insert(const K& key, const V& value) { return map_.insert_or_assign(key, value).second; }
 
@@ -37,6 +36,10 @@ public:
     }
 
     bool contains(const K& key) const { return map_.find(key) != map_.end(); }
+
+    // at() throws std::out_of_range for a missing key, matching the interface.
+    V& operator[](const K& key) { return map_.at(key); }
+    const V& operator[](const K& key) const { return map_.at(key); }
 
     bool erase(const K& key) { return map_.erase(key) != 0; }
 
@@ -49,12 +52,6 @@ public:
         for (const auto& [k, v] : map_) visit(k, v);
     }
 
-    template <class F>
-    void for_each_in_range(const K& lo, const K& hi, F&& visit) const {
-        auto last = map_.upper_bound(hi);
-        for (auto it = map_.lower_bound(lo); it != last; ++it) visit(it->first, it->second);
-    }
-
     bool check_invariants() const { return true; }
 
     const OpCounters& counters() const { return *counters_; }
@@ -65,10 +62,9 @@ private:
     // adapter stays movable without the comparator dangling.
     struct CountingLess {
         OpCounters* counters;
-        Compare less;
         bool operator()(const K& a, const K& b) const {
             DICT_COUNT(*counters, comparisons, 1);
-            return less(a, b);
+            return a < b;
         }
     };
 

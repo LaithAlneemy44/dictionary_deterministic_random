@@ -1,0 +1,21 @@
+SKIP LIST DEEP DIVE (Laith, about 2:30)
+
+[Show: skip list diagram, four levels, head on the left]
+
+The invariant my skip list depends on is simple. Every level is a sorted linked list, and every level is a sub-list of the level below it. Level zero holds every key. A node's pointer at level k goes to the next node whose tower reaches level k. Everything else in the code exists to keep that true.
+
+[Highlight a search path for one key]
+
+Search starts at the top level of the head. It moves right while the next key is less than the target, and otherwise drops down a level. The important detail is that it never stops early. At every level it records the node where it dropped down: the predecessor at that level.
+
+Why? Because insert and erase need the predecessor at every level the node occupies, and those are exactly the nodes where the search dropped. So search returns the last node strictly less than the target, and checking for a duplicate is one comparison on the next node at level zero. An AI explanation once blurred those two nodes, and catching that is how I really understood it.
+
+[Show: erasing a short node under a tall predecessor]
+
+Erase has one case that's easy to miss. It must only unlink at levels where the predecessor actually points to the node being removed. Above the node's own height, the predecessor points somewhere else, and unlinking there would silently cut a different node out of that level.
+
+[Show: path_length.png]
+
+Why is this O(log n) with no rebalancing? Each node climbs a level on a coin flip, so each level holds about half the nodes below it, giving about log n levels. Trace a search backwards: if a node's tower reaches the level above, the search came down from it, so we go up; otherwise we go left. That's a fair coin, so we expect one left move per level, plus one move down. That's about 2 log n steps, and we measured 1.88 to 2.04 times log n.
+
+The worst case is O(n), but only with very bad coin flips. No input order can cause it, because heights never depend on the keys. The catch is that our seed is fixed, so someone who knew it could predict which insertions get tall towers.
