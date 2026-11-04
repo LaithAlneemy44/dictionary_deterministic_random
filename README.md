@@ -25,10 +25,13 @@ core/include/dict/
 red_black_tree/         deterministic implementation
 randomised/             skip list (header-only) + its own standalone CMake/GoogleTest unit tests
 adapters/               SkipListAdapter: exposes randomised/skip_list.hpp to tests/ and bench/
-tests/                  correctness tests, run against every implementation
+tests/                  correctness tests, run against every implementation,
+                        plus the hypotheses and their analysis (see Results)
 bench/                  benchmark harness (built as two binaries, see below)
-scripts/                experiment runner and plotting
-docs/                   predictions, report, reflections
+scripts/                experiment runner, plotting, skip list model simulation
+results/                raw CSVs, summary tables (summary/) and plots (plots/)
+docs/                   write-up context, video script, reflections
+ai-failures.md          examples of AI suggestions that were wrong, for the AI-use disclosure
 ```
 
 ## Building
@@ -46,6 +49,16 @@ ctest --preset x64-release
 ```
 
 Use `x64-debug` instead while developing. **Always benchmark the Release build.**
+
+**GCC (used for the reported results):** the results in `results/` come from GCC 16.2 (MSYS2 MinGW-w64) with CMake and Ninja, not from the MSVC presets. With `C:\msys64\mingw64\bin` on `PATH`:
+
+```powershell
+cmake -S . -B out/build/gcc-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++
+cmake --build out/build/gcc-release
+.\scripts\run_experiments.ps1 -BinDir out\build\gcc-release\bench
+```
+
+CMake's Release flags for GCC are `-O3 -DNDEBUG`.
 
 ## Tests
 
@@ -137,7 +150,22 @@ pip install -r scripts/requirements.txt
 python scripts/plot_results.py
 ```
 
-This writes PNGs to `results/plots/`: median ns/op vs n with a p5–p95 band, and per-operation cost CCDFs (tail plots).
+This writes PNGs to `results/plots/` and summary tables to `results/summary/`. The plots include median ns/op vs n with a p5–p95 band, per-operation cost CCDFs (tail plots), step and distinct-node counts, write cost beyond the search, seed spread, page locality and heap layout.
+
+`results/` is gitignored apart from `plots/`, so commit new CSVs with `git add -f`.
+
+## Results
+
+The analysis lives next to the tests, in the order it was written:
+
+| File | Contents |
+|---|---|
+| [`tests/hypotheses.md`](tests/hypotheses.md) | The five predictions, committed before any results |
+| [`tests/theories.md`](tests/theories.md) | Explanations for the hypothesis results, and the tests designed to check them |
+| [`tests/theory_results.md`](tests/theory_results.md) | What those tests showed, two rounds of follow-up tests, and what is still unexplained |
+| [`docs/writeup_context.md`](docs/writeup_context.md) | A self-contained summary of method, results and theory for the report |
+
+All results come from one machine: AMD Ryzen 5 5600G, 16 GB DDR4-3200, Windows 11 Pro.
 
 ## Implementing a module
 
